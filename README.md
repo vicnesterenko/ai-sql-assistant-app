@@ -1,1 +1,0 @@
-# ai-sql-assistant-app
