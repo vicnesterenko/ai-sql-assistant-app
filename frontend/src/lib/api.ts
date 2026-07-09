@@ -15,6 +15,7 @@ export type AssistantResponse = {
   approval_request_id?: string | null;
   rejection_reason?: string | null;
   audit_id?: string | null;
+  execution_status?: string | null;
 };
 
 export type MessageRecord = {

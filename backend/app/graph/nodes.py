@@ -138,6 +138,7 @@ async def await_approval_node(state: SQLAssistantStateDict) -> SQLAssistantState
                 approval_request_id=model.approval_request_id,
                 rejection_reason=reason,
                 audit_id=model.audit_id,
+                execution_status="rejected",
             )
             if model.audit_id:
                 await audit_service.update_audit(model.audit_id, execution_status="rejected", error_message=reason)
@@ -220,6 +221,7 @@ async def format_result_node(state: SQLAssistantStateDict) -> SQLAssistantStateD
                 pending_approval=False,
                 approval_request_id=model.approval_request_id,
                 audit_id=model.audit_id,
+                execution_status="ok",
             )
             new_state = model.model_copy(update={"final_response": response})
             await save_state(new_state)
@@ -235,6 +237,7 @@ async def format_result_node(state: SQLAssistantStateDict) -> SQLAssistantStateD
             pending_approval=False,
             approval_request_id=model.approval_request_id,
             audit_id=model.audit_id,
+            execution_status=model.execution_result.status if model.execution_result else "blocked",
         )
         new_state = model.model_copy(update={"final_response": response})
         await save_state(new_state)
@@ -252,6 +255,7 @@ async def handle_error_node(state: SQLAssistantStateDict) -> SQLAssistantStateDi
             risk_justification=model.risk_justification,
             assumptions=model.intent.assumptions if model.intent else [],
             audit_id=model.audit_id,
+            execution_status="blocked",
         )
         if model.audit_id:
             await audit_service.update_audit(model.audit_id, execution_status="blocked", error_message=error)

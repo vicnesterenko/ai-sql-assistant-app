@@ -12,8 +12,9 @@ const EXAMPLE_QUESTIONS = [
 ];
 
 function RiskBadge({ response }: { response: AssistantResponse }) {
-  const level = response.risk_level ?? 'UNKNOWN';
-  return <span className={`risk risk-${level}`} title={response.risk_justification ?? ''}>{level}</span>;
+  const status = response.execution_status;
+  const level = response.risk_level ?? (status === 'blocked' || status === 'rejected' ? 'BLOCKED' : 'UNKNOWN');
+  return <span className={`risk risk-${level}`} title={response.risk_justification ?? response.rejection_reason ?? ''}>{level}</span>;
 }
 
 function StatusStrip({ response }: { response: AssistantResponse }) {

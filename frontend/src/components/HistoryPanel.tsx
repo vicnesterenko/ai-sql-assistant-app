@@ -33,7 +33,7 @@ export function HistoryPanel({ sessionId }: { sessionId?: string }) {
               {items.map((item) => {
                 const sql = item.final_sql ?? item.generated_sql ?? '';
                 const status = (item.execution_status ?? 'unknown').toLowerCase();
-                const risk = item.risk_level ?? 'UNKNOWN';
+                const risk = item.risk_level ?? (status === 'blocked' || status === 'rejected' ? 'BLOCKED' : 'UNKNOWN');
                 return (
                   <tr key={item.id}>
                     <td className="cell-question" title={item.question}>{item.question}</td>

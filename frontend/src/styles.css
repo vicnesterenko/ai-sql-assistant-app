@@ -236,11 +236,13 @@ code { font-family: "SFMono-Regular", Consolas, Menlo, monospace; font-size: 12p
 .risk-MEDIUM { background: var(--warning-bg); color: var(--warning-text); border: 1px solid var(--warning-border); }
 .risk-HIGH { background: var(--error-bg); color: var(--error-text); border: 1px solid var(--error-border); }
 .risk-UNKNOWN { background: #f1eaee; color: var(--text-muted); border: 1px solid var(--border); }
+.risk-BLOCKED { background: var(--lavender); color: var(--lavender-text); border: 1px solid var(--lavender-border); }
 
 .status-badge { display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; }
 .status-ok { background: var(--success-bg); color: var(--success-text); border: 1px solid var(--success-border); }
 .status-error, .status-timeout { background: var(--error-bg); color: var(--error-text); border: 1px solid var(--error-border); }
 .status-unknown { background: #f1eaee; color: var(--text-muted); border: 1px solid var(--border); }
+.status-blocked, .status-rejected { background: var(--lavender); color: var(--lavender-text); border: 1px solid var(--lavender-border); }
 
 /* SQL block */
 .sql-block { margin: 10px 0; border-radius: 12px; overflow: hidden; border: 1px solid var(--border-strong); }
