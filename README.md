@@ -155,6 +155,7 @@ In the frontend, set email/role in the top bar:
 - Uses deterministic, keyword-matched SQL templates (`backend/app/resources/mock_sql_query.py`) covering the demo questions above, including follow-ups.
 - Risk assessment and validation run identically in both modes — they don't depend on the LLM.
 - Switch to the real LLM with `USE_MOCK_LLM=false` and a valid `OPENAI_API_KEY`.
+- If OpenAI is unavailable, the service logs the error and falls back to deterministic mock SQL templates.
 
 ## 12. Project structure
 
