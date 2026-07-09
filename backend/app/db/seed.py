@@ -15,56 +15,9 @@ from app.resources.sql_query import (
     INSERT_TRANSACTIONS_SQL,
     INSERT_USERS_SQL,
 )
+from app.db.utils import CHANNELS, LOAN_STATUSES, TX_STATUSES, CATEGORIES, MERCHANTS
 
 fake = Faker()
-
-CHANNELS = [
-    "organic",
-    "paid_search",
-    "facebook_ads",
-    "referral",
-    "partner",
-    "email",
-    "affiliate",
-]
-
-LOAN_STATUSES = [
-    "submitted",
-    "approved",
-    "rejected",
-    "cancelled",
-]
-
-TX_STATUSES = [
-    "success",
-    "failed",
-    "pending",
-    "refunded",
-]
-
-CATEGORIES = [
-    "grocery",
-    "electronics",
-    "travel",
-    "fuel",
-    "restaurant",
-    "utilities",
-    "health",
-    "education",
-]
-
-MERCHANTS = [
-    "Silpo",
-    "Rozetka",
-    "WOG",
-    "OKKO",
-    "NovaPay",
-    "Bolt",
-    "Uklon",
-    "Epicentr",
-    "Megamarket",
-    "Comfy",
-]
 
 
 def random_dt(start: datetime, end: datetime) -> datetime:

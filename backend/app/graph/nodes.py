@@ -1,5 +1,3 @@
-import re
-
 from app.core.logger_setup import log_event, log_node
 from app.models.types import ApprovalStatus, AssistantResponse, RiskLevel, SQLAssistantState
 from app.services import audit_service
@@ -11,35 +9,15 @@ from app.services.session_service import last_successful_sql
 from app.services.sql_validation import validate_sql
 from app.services.state_store import save_state
 from app.graph.state import SQLAssistantStateDict
+from app.graph.utils import detect_mutation_keyword
 
 
-def _state_model(state: SQLAssistantStateDict) -> SQLAssistantState:
+def state_model(state: SQLAssistantStateDict) -> SQLAssistantState:
     return SQLAssistantState.model_validate(state)
 
 
-MUTATION_VERB_TO_SQL_KEYWORD = {
-    r"\bdelete\b": "DELETE",
-    r"\bremove\b": "DELETE",
-    r"\bdrop\b": "DROP",
-    r"\btruncate\b": "TRUNCATE",
-    r"\binsert\b": "INSERT",
-    r"\bupdate\b": "UPDATE",
-    r"\balter\b": "ALTER",
-    r"\bgrant\b": "GRANT",
-    r"\brevoke\b": "REVOKE",
-}
-
-
-def _detect_mutation_keyword(*texts: str) -> str | None:
-    combined = " ".join(t for t in texts if t).lower()
-    for pattern, keyword in MUTATION_VERB_TO_SQL_KEYWORD.items():
-        if re.search(pattern, combined):
-            return keyword
-    return None
-
-
 async def parse_intent_node(state: SQLAssistantStateDict) -> SQLAssistantStateDict:
-    model = _state_model(state)
+    model = state_model(state)
     with log_node(model.session_id, model.thread_id, "parse_intent"):
         if not model.audit_id:
             audit_id = await audit_service.create_audit(
@@ -59,12 +37,12 @@ async def parse_intent_node(state: SQLAssistantStateDict) -> SQLAssistantStateDi
 
 
 async def generate_sql_node(state: SQLAssistantStateDict) -> SQLAssistantStateDict:
-    model = _state_model(state)
+    model = state_model(state)
     with log_node(model.session_id, model.thread_id, "generate_sql"):
         if not model.intent:
             return {"error": "Intent is missing"}
 
-        mutation_keyword = _detect_mutation_keyword(model.intent.question, model.current_question)
+        mutation_keyword = detect_mutation_keyword(model.intent.question, model.current_question)
         if mutation_keyword:
             sql = f"-- refused: request implies a {mutation_keyword} operation\n{mutation_keyword}"
         else:
@@ -77,7 +55,7 @@ async def generate_sql_node(state: SQLAssistantStateDict) -> SQLAssistantStateDi
 
 
 async def validate_sql_node(state: SQLAssistantStateDict) -> SQLAssistantStateDict:
-    model = _state_model(state)
+    model = state_model(state)
     with log_node(model.session_id, model.thread_id, "validate_sql"):
         if not model.generated_sql:
             return {"error": "No SQL generated", "retry_count": model.retry_count + 1}
@@ -99,7 +77,7 @@ async def validate_sql_node(state: SQLAssistantStateDict) -> SQLAssistantStateDi
 
 
 async def assess_risk_node(state: SQLAssistantStateDict) -> SQLAssistantStateDict:
-    model = _state_model(state)
+    model = state_model(state)
     with log_node(model.session_id, model.thread_id, "assess_risk"):
         if not model.generated_sql or not model.validation_result:
             return {"risk_level": RiskLevel.HIGH, "risk_justification": "Missing SQL or validation result."}
@@ -110,7 +88,7 @@ async def assess_risk_node(state: SQLAssistantStateDict) -> SQLAssistantStateDic
 
 
 async def request_approval_node(state: SQLAssistantStateDict) -> SQLAssistantStateDict:
-    model = _state_model(state)
+    model = state_model(state)
     with log_node(model.session_id, model.thread_id, "request_approval"):
         approval_id = await create_approval_request(
             session_id=model.session_id,
@@ -141,7 +119,7 @@ async def request_approval_node(state: SQLAssistantStateDict) -> SQLAssistantSta
 
 
 async def await_approval_node(state: SQLAssistantStateDict) -> SQLAssistantStateDict:
-    model = _state_model(state)
+    model = state_model(state)
     with log_node(model.session_id, model.thread_id, "await_approval"):
         decision = model.approval_decision
         if not decision:
@@ -168,7 +146,7 @@ async def await_approval_node(state: SQLAssistantStateDict) -> SQLAssistantState
 
 
 async def execute_query_node(state: SQLAssistantStateDict) -> SQLAssistantStateDict:
-    model = _state_model(state)
+    model = state_model(state)
     with log_node(model.session_id, model.thread_id, "execute_query"):
         sql = model.approved_sql or model.generated_sql
         if not sql:
@@ -212,7 +190,7 @@ async def execute_query_node(state: SQLAssistantStateDict) -> SQLAssistantStateD
 
 
 async def format_result_node(state: SQLAssistantStateDict) -> SQLAssistantStateDict:
-    model = _state_model(state)
+    model = state_model(state)
     with log_node(model.session_id, model.thread_id, "format_result"):
         if model.final_response and model.final_response.rejection_reason:
             await save_state(model)
@@ -264,7 +242,7 @@ async def format_result_node(state: SQLAssistantStateDict) -> SQLAssistantStateD
 
 
 async def handle_error_node(state: SQLAssistantStateDict) -> SQLAssistantStateDict:
-    model = _state_model(state)
+    model = state_model(state)
     with log_node(model.session_id, model.thread_id, "handle_error"):
         error = model.error or "Unknown error"
         response = AssistantResponse(

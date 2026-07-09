@@ -1,21 +1,41 @@
 """
-Approver approves/rejects
-↓
-resume_after_approval()
-↓
-load_state або rebuild state по approval_id
-↓
-await_approval
-↓
-if approved:
-    execute_query
-    ↓
-    format_result
-↓
-if rejected:
-    format_result з rejection message
-"""
+LangGraph workflow definition for the AI SQL Assistant.
 
+This module defines two graph entry points:
+
+1. `compiled_graph`
+   Used for a normal user chat message. It starts from `parse_intent` and runs
+   the full flow:
+
+       parse_intent
+       -> generate_sql
+       -> validate_sql
+       -> assess_risk
+       -> execute_query / request_approval
+       -> format_result
+
+   If the query is LOW or MEDIUM risk, it is executed immediately. If the query
+   is HIGH risk, it is saved to the approval queue and the graph stops at
+   `await_approval`.
+
+2. `compiled_resume_graph`
+   Used after an approver approves or rejects a pending HIGH-risk query. It does
+   not start from `parse_intent`, because the intent, generated SQL, validation,
+   and risk assessment were already completed before approval.
+
+   Instead, it resumes from `await_approval`:
+
+       await_approval
+       -> execute_query / format_result
+       -> format_result
+
+   If the approval was accepted, the approved SQL is executed. If it was
+   rejected, the graph formats a rejection response.
+
+The persisted graph state is loaded by `resume_after_approval()`. If several
+approval requests exist in the same session/thread, the state can be rebuilt
+from the specific approval row to avoid resuming the wrong query.
+"""
 from langgraph.graph import END, StateGraph
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -31,6 +51,7 @@ from app.graph.nodes import (
     request_approval_node,
     validate_sql_node,
 )
+from app.graph.utils import obj_value
 from app.models.types import ApprovalDecision, ApprovalStatus, Intent, RiskLevel, SQLAssistantState
 from app.services.approval_service import decision_from_row, get_approval
 from app.services.audit_service import get_audit_by_approval_request
@@ -38,17 +59,10 @@ from app.services.session_service import recent_context
 from app.services.state_store import load_state, save_state
 
 
-def _obj_value(obj, key, default=None):
-    if obj is None:
-        return default
-    if isinstance(obj, dict):
-        return obj.get(key, default)
-    return getattr(obj, key, default)
-
 
 def route_validation(state: SQLAssistantStateDict) -> str:
     validation = state.get("validation_result")
-    if validation and _obj_value(validation, "is_valid"):
+    if validation and obj_value(validation, "is_valid"):
         return "valid"
     if state.get("retry_count", 0) <= 2:
         return "retry"
@@ -67,7 +81,7 @@ def route_approval(state: SQLAssistantStateDict) -> str:
     decision = state.get("approval_decision")
     if not decision:
         return "wait"
-    status = _obj_value(decision, "status")
+    status = obj_value(decision, "status")
     status_value = status.value if hasattr(status, "value") else status
     if status_value == ApprovalStatus.APPROVED.value:
         return "approved"
@@ -76,13 +90,14 @@ def route_approval(state: SQLAssistantStateDict) -> str:
 
 def route_execution(state: SQLAssistantStateDict) -> str:
     result = state.get("execution_result")
-    if result and _obj_value(result, "status") == "ok":
+    if result and obj_value(result, "status") == "ok":
         return "ok"
     if state.get("execution_retry_count", 0) <= 1:
         return "retry"
     return "done"
 
-
+# Main graph for a new user message.
+# This graph always starts from natural-language intent parsing.
 builder = StateGraph(SQLAssistantStateDict)
 
 builder.add_node("parse_intent", parse_intent_node)
@@ -114,7 +129,11 @@ builder.add_edge("handle_error", END)
 
 compiled_graph = builder.compile(checkpointer=MemorySaver())
 
+# Resume graph for human-in-the-loop approval.
+# This graph starts from `await_approval`, because SQL generation and risk
+# assessment already happened before the query was sent to the approval queue.
 resume_builder = StateGraph(SQLAssistantStateDict)
+
 resume_builder.add_node("await_approval", await_approval_node)
 resume_builder.add_node("execute_query", execute_query_node)
 resume_builder.add_node("generate_sql", generate_sql_node)
