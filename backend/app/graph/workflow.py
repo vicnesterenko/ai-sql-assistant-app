@@ -14,13 +14,12 @@ This module defines two graph entry points:
        -> execute_query / request_approval
        -> format_result
 
-   If the query is LOW risk, it is executed immediately. If the query is MEDIUM
-   or HIGH risk, it is saved to the approval queue and the graph stops at
-   `await_approval`.
+   If the query is LOW or MEDIUM risk, it is executed immediately (MEDIUM emits
+   a warning to the user first). If the query is HIGH risk, it is saved to the
+   approval queue and the graph stops at `await_approval`.
 
 2. `compiled_resume_graph`
-   Used after an approver approves or rejects a pending MEDIUM- or HIGH-risk
-   query. It does
+   Used after an approver approves or rejects a pending HIGH-risk query. It does
    not start from `parse_intent`, because the intent, generated SQL, validation,
    and risk assessment were already completed before approval.
 
@@ -65,7 +64,7 @@ def route_validation(state: SQLAssistantStateDict) -> str:
     validation = state.get("validation_result")
     if validation and obj_value(validation, "is_valid"):
         return "valid"
-    if state.get("retry_count", 0) < 2:
+    if state.get("retry_count", 0) < 3:
         return "retry"
     return "error"
 
@@ -73,7 +72,7 @@ def route_validation(state: SQLAssistantStateDict) -> str:
 def route_risk(state: SQLAssistantStateDict) -> str:
     risk = state.get("risk_level")
     risk_value = risk.value if hasattr(risk, "value") else risk
-    if risk_value in ("HIGH", "MEDIUM"):
+    if risk_value == "HIGH":
         return "high"
     return "execute"
 
@@ -93,7 +92,7 @@ def route_execution(state: SQLAssistantStateDict) -> str:
     result = state.get("execution_result")
     if result and obj_value(result, "status") == "ok":
         return "ok"
-    if state.get("execution_retry_count", 0) < 1:
+    if state.get("execution_retry_count", 0) < 2:
         return "retry"
     return "done"
 

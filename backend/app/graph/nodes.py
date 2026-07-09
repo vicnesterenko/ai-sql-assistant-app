@@ -203,15 +203,20 @@ async def format_result_node(state: SQLAssistantStateDict) -> SQLAssistantStateD
             else ""
         )
 
+        was_modified = bool(model.approved_sql and model.generated_sql and model.approved_sql != model.generated_sql)
+        original_sql = model.generated_sql if was_modified else None
+        modification_note = "The approver modified this query before running it. " if was_modified else ""
+
         if model.execution_result and model.execution_result.status == "ok":
             trunc = " Results were truncated to the configured maximum." if model.execution_result.truncated else ""
             message = (
-                f"{risk_warning}Query executed successfully. "
+                f"{risk_warning}{modification_note}Query executed successfully. "
                 f"Returned {model.execution_result.row_count} row(s).{trunc}"
             )
             response = AssistantResponse(
                 message=message,
                 sql=model.approved_sql or model.generated_sql,
+                original_sql=original_sql,
                 risk_level=model.risk_level,
                 risk_justification=model.risk_justification,
                 assumptions=model.intent.assumptions if model.intent else [],
@@ -229,8 +234,9 @@ async def format_result_node(state: SQLAssistantStateDict) -> SQLAssistantStateD
 
         error = model.error or (model.execution_result.error_message if model.execution_result else "Unknown failure")
         response = AssistantResponse(
-            message=f"{risk_warning}I could not execute the query: {error}",
+            message=f"{risk_warning}{modification_note}I could not execute the query: {error}",
             sql=model.approved_sql or model.generated_sql,
+            original_sql=original_sql,
             risk_level=model.risk_level,
             risk_justification=model.risk_justification,
             assumptions=model.intent.assumptions if model.intent else [],

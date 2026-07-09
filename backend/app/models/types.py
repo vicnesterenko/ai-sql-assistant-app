@@ -76,6 +76,11 @@ class ExecutionResult(BaseModel):
 class AssistantResponse(BaseModel):
     message: str = Field(description="User-facing natural language response.")
     sql: str | None = Field(default=None, description="Generated or approved SQL shown in the UI collapsible block.")
+    original_sql: str | None = Field(
+        default=None,
+        description="Pre-modification SQL, set only when an approver edited the query before approving, so the "
+        "requester can see the diff against `sql`.",
+    )
     risk_level: RiskLevel | None = Field(default=None, description="Risk badge shown to the user.")
     risk_justification: str | None = Field(default=None, description="Tooltip text explaining the risk classification.")
     assumptions: list[str] = Field(default_factory=list, description="Assumptions surfaced to the user.")

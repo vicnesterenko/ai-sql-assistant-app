@@ -9,6 +9,7 @@ export default function App() {
   const [email, setEmail] = useState('analyst@example.com');
   const [role, setRole] = useState<'analyst' | 'approver'>('analyst');
   const [sessionKey, setSessionKey] = useState(0);
+  const [sessionId, setSessionId] = useState<string>('');
 
   return (
     <main className="app-shell">
@@ -34,7 +35,7 @@ export default function App() {
       </header>
       <div className="layout">
         <div className="main-column">
-          <ChatPanel key={sessionKey} email={email} role={role} />
+          <ChatPanel key={sessionKey} email={email} role={role} onSessionChange={setSessionId} />
         </div>
         <div className="side-column">
           <SchemaExplorer />
@@ -42,7 +43,7 @@ export default function App() {
         </div>
       </div>
       <div className="history-section">
-        <HistoryPanel />
+        <HistoryPanel sessionId={sessionId} />
       </div>
     </main>
   );

@@ -137,6 +137,25 @@ In the frontend, set email/role in the top bar:
 4. The requester's session resumes automatically (polling) and shows the final result or rejection reason.
 5. If no approver acts within `APPROVAL_TIMEOUT_MINUTES` (default 60), the request is marked expired the next time an approval endpoint is polled (`GET /api/approvals` or `GET /api/approvals/{id}`) — there is no background scheduler. In practice this happens when an approver's Approval panel is open and polling the queue; the requester's own session polling does not trigger it. Once expired, the requester's session picks up the "expired" result on its next poll.
 
+### 9.1 Graph persistence trade-off
+
+`compiled_graph` and `compiled_resume_graph` (`backend/app/graph/workflow.py`) are both compiled with LangGraph's
+`MemorySaver()`, which keeps checkpoints in the process's memory only — they do not survive a process restart.
+
+In practice, resumability across the approval boundary does **not** depend on `MemorySaver`. Every node write is
+also persisted to the `graph_state_snapshots` table via `save_state`/`load_state`
+(`backend/app/services/state_store.py`), and `resume_after_approval()` rebuilds the LangGraph state from that table
+(falling back to `sql_approval_queue` + `sql_query_audit` when several pending requests exist in the same
+session/thread — see `_rebuild_state_from_approval_row`). This is what actually lets a request survive a backend
+restart while waiting on an approver.
+
+The trade-off: this works today, but it's a bespoke persistence layer sitting next to LangGraph's own checkpointing
+rather than using it, which is what the assignment asks for ("Use LangGraph's built-in checkpointing"). A production
+fix would swap `MemorySaver()` for `langgraph-checkpoint-postgres`'s `AsyncPostgresSaver` (backed by the same
+Postgres instance), and let `resume_after_approval()` resume the thread directly from the checkpointer instead of
+reconstructing `SQLAssistantState` by hand. That's a bigger change — a new dependency, checkpointer-owned tables,
+and a migration of the resume path — so it was left as a documented gap rather than done under this task's scope.
+
 ## 10. Safety features
 
 - Only `SELECT` statements are ever executed.
