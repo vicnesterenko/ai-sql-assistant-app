@@ -64,7 +64,7 @@ def route_validation(state: SQLAssistantStateDict) -> str:
     validation = state.get("validation_result")
     if validation and obj_value(validation, "is_valid"):
         return "valid"
-    if state.get("retry_count", 0) <= 2:
+    if state.get("retry_count", 0) < 2:
         return "retry"
     return "error"
 
@@ -92,7 +92,7 @@ def route_execution(state: SQLAssistantStateDict) -> str:
     result = state.get("execution_result")
     if result and obj_value(result, "status") == "ok":
         return "ok"
-    if state.get("execution_retry_count", 0) <= 1:
+    if state.get("execution_retry_count", 0) < 1:
         return "retry"
     return "done"
 

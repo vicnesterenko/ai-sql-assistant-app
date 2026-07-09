@@ -3,6 +3,7 @@ import re
 
 from langchain_openai import ChatOpenAI
 
+from app.core.logger_setup import log_event
 from app.core.settings import settings
 from app.models.types import Intent
 from app.resources.prompt import (
@@ -46,7 +47,20 @@ class LLMService:
             question=question,
         )
 
-        msg = await self._model.ainvoke(prompt)
+        try:
+            msg = await self._model.ainvoke(prompt)
+        except Exception as exc:
+            log_event(
+                "llm.parse_intent.failed",
+                provider="openai",
+                model=settings.openai_model,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            return self._mock.parse_intent(
+                question=question,
+                previous_sql=previous_sql,
+            )
 
         fallback_intent = self._mock.parse_intent(
             question=question,
@@ -55,10 +69,22 @@ class LLMService:
 
         try:
             data = json.loads(self._strip_code_fence(str(msg.content)))
-        except Exception:
+        except Exception as exc:
+            log_event(
+                "llm.parse_intent.invalid_json",
+                provider="openai",
+                model=settings.openai_model,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
             return fallback_intent
 
         if not isinstance(data, dict):
+            log_event(
+                "llm.parse_intent.invalid_shape",
+                provider="openai",
+                model=settings.openai_model,
+            )
             return fallback_intent
 
         assumptions = data.get("assumptions", [])
@@ -94,7 +120,21 @@ class LLMService:
             previous_sql=previous_sql,
         )
 
-        msg = await self._model.ainvoke(prompt)
+        try:
+            msg = await self._model.ainvoke(prompt)
+        except Exception as exc:
+            log_event(
+                "llm.generate_sql.failed",
+                provider="openai",
+                model=settings.openai_model,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            return self._mock.generate_sql(
+                intent=intent,
+                previous_error=previous_error,
+                previous_sql=previous_sql,
+            )
 
         return self._extract_sql(str(msg.content))
 
