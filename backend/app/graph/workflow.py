@@ -14,12 +14,13 @@ This module defines two graph entry points:
        -> execute_query / request_approval
        -> format_result
 
-   If the query is LOW or MEDIUM risk, it is executed immediately. If the query
-   is HIGH risk, it is saved to the approval queue and the graph stops at
+   If the query is LOW risk, it is executed immediately. If the query is MEDIUM
+   or HIGH risk, it is saved to the approval queue and the graph stops at
    `await_approval`.
 
 2. `compiled_resume_graph`
-   Used after an approver approves or rejects a pending HIGH-risk query. It does
+   Used after an approver approves or rejects a pending MEDIUM- or HIGH-risk
+   query. It does
    not start from `parse_intent`, because the intent, generated SQL, validation,
    and risk assessment were already completed before approval.
 
@@ -72,7 +73,7 @@ def route_validation(state: SQLAssistantStateDict) -> str:
 def route_risk(state: SQLAssistantStateDict) -> str:
     risk = state.get("risk_level")
     risk_value = risk.value if hasattr(risk, "value") else risk
-    if risk_value == "HIGH":
+    if risk_value in ("HIGH", "MEDIUM"):
         return "high"
     return "execute"
 
