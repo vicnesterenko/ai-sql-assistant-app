@@ -1,5 +1,11 @@
 # AI SQL Assistant
 
+Deployed on Render (DB and site):
+- Frontend: https://ai-sql-assistant-app.onrender.com/
+- Endpoints (API docs): https://ai-sql-assistant-db.onrender.com/docs
+
+Deployment is running on the project's [test branch](https://github.com/vicnesterenko/ai-sql-assistant-app/tree/test).
+
 Internal analytics tool that lets non-technical staff ask questions in plain language and get safe, validated SQL results — with automatic risk assessment and human approval for anything expensive or sensitive.
 
 ## 1. Project overview
