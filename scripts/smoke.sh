@@ -8,7 +8,7 @@ SESSION_ID=$(curl -s -X POST "$BASE/api/sessions" \
   -H "Content-Type: application/json" \
   -H "X-User-Email: $EMAIL" \
   -H "X-User-Role: $ROLE" \
-  -d "{\"requester_email\":\"$EMAIL\"}" | python -c 'import json,sys; print(json.load(sys.stdin)["session_id"])')
+  -d "{\"requester_email\":\"$EMAIL\"}" | python -c 'import json,sys; (json.load(sys.stdin)["session_id"])')
 
 echo "session=$SESSION_ID"
 

@@ -19,5 +19,5 @@ async def close_pool() -> None:
 
 def get_pool() -> asyncpg.Pool:
     if _pool is None:
-        raise RuntimeError('Database pool is not initialized')
+        raise RuntimeError("Database pool is not initialized")
     return _pool
