@@ -86,6 +86,9 @@ class AssistantResponse(BaseModel):
     approval_request_id: str | None = Field(default=None, description="Approval queue identifier used by polling UI.")
     rejection_reason: str | None = Field(default=None, description="Human rejection reason when relevant.")
     audit_id: str | None = Field(default=None, description="Audit row identifier for traceability.")
+    execution_status: str | None = Field(
+        default=None, description="Execution status mirroring the audit trail (e.g. ok/blocked/rejected)."
+    )
 
 
 class SQLAssistantState(BaseModel):
