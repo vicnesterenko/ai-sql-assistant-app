@@ -65,6 +65,13 @@ def build_generate_sql_prompt(
           the question says otherwise.
         - If user asks for all rows/everything, still generate a SELECT, but
           do not force safety; validator/risk flow will route it.
+        - PostgreSQL INTERVAL literals only accept units like day, week,
+          month, year (and their plurals) — "quarter" is NOT a valid
+          INTERVAL unit and will raise a syntax error. For "last quarter" or
+          similar, use date_trunc('quarter', CURRENT_DATE) combined with
+          INTERVAL '3 months', e.g.:
+          created_at >= date_trunc('quarter', CURRENT_DATE) - INTERVAL '3 months'
+          AND created_at < date_trunc('quarter', CURRENT_DATE)
         - Return SQL only, no markdown.
 
         Allowed schema:
