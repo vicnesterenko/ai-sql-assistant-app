@@ -9,14 +9,15 @@ from app.services.session_service import last_successful_sql
 from app.services.sql_validation import validate_sql
 from app.services.state_store import save_state
 from app.graph.state import SQLAssistantStateDict
+from app.graph.utils import detect_mutation_keyword
 
 
-def _state_model(state: SQLAssistantStateDict) -> SQLAssistantState:
+def state_model(state: SQLAssistantStateDict) -> SQLAssistantState:
     return SQLAssistantState.model_validate(state)
 
 
 async def parse_intent_node(state: SQLAssistantStateDict) -> SQLAssistantStateDict:
-    model = _state_model(state)
+    model = state_model(state)
     with log_node(model.session_id, model.thread_id, "parse_intent"):
         if not model.audit_id:
             audit_id = await audit_service.create_audit(
@@ -36,18 +37,25 @@ async def parse_intent_node(state: SQLAssistantStateDict) -> SQLAssistantStateDi
 
 
 async def generate_sql_node(state: SQLAssistantStateDict) -> SQLAssistantStateDict:
-    model = _state_model(state)
+    model = state_model(state)
     with log_node(model.session_id, model.thread_id, "generate_sql"):
         if not model.intent:
             return {"error": "Intent is missing"}
-        sql = await llm_service.generate_sql(model.intent, previous_error=model.error, previous_sql=model.generated_sql)
+
+        mutation_keyword = detect_mutation_keyword(model.intent.question, model.current_question)
+        if mutation_keyword:
+            sql = f"-- refused: request implies a {mutation_keyword} operation\n{mutation_keyword}"
+        else:
+            sql = await llm_service.generate_sql(
+                model.intent, previous_error=model.error, previous_sql=model.generated_sql
+            )
         if model.audit_id:
             await audit_service.update_audit(model.audit_id, generated_sql=sql)
         return {"generated_sql": sql, "error": None}
 
 
 async def validate_sql_node(state: SQLAssistantStateDict) -> SQLAssistantStateDict:
-    model = _state_model(state)
+    model = state_model(state)
     with log_node(model.session_id, model.thread_id, "validate_sql"):
         if not model.generated_sql:
             return {"error": "No SQL generated", "retry_count": model.retry_count + 1}
@@ -69,7 +77,7 @@ async def validate_sql_node(state: SQLAssistantStateDict) -> SQLAssistantStateDi
 
 
 async def assess_risk_node(state: SQLAssistantStateDict) -> SQLAssistantStateDict:
-    model = _state_model(state)
+    model = state_model(state)
     with log_node(model.session_id, model.thread_id, "assess_risk"):
         if not model.generated_sql or not model.validation_result:
             return {"risk_level": RiskLevel.HIGH, "risk_justification": "Missing SQL or validation result."}
@@ -80,7 +88,7 @@ async def assess_risk_node(state: SQLAssistantStateDict) -> SQLAssistantStateDic
 
 
 async def request_approval_node(state: SQLAssistantStateDict) -> SQLAssistantStateDict:
-    model = _state_model(state)
+    model = state_model(state)
     with log_node(model.session_id, model.thread_id, "request_approval"):
         approval_id = await create_approval_request(
             session_id=model.session_id,
@@ -111,7 +119,7 @@ async def request_approval_node(state: SQLAssistantStateDict) -> SQLAssistantSta
 
 
 async def await_approval_node(state: SQLAssistantStateDict) -> SQLAssistantStateDict:
-    model = _state_model(state)
+    model = state_model(state)
     with log_node(model.session_id, model.thread_id, "await_approval"):
         decision = model.approval_decision
         if not decision:
@@ -138,7 +146,7 @@ async def await_approval_node(state: SQLAssistantStateDict) -> SQLAssistantState
 
 
 async def execute_query_node(state: SQLAssistantStateDict) -> SQLAssistantStateDict:
-    model = _state_model(state)
+    model = state_model(state)
     with log_node(model.session_id, model.thread_id, "execute_query"):
         sql = model.approved_sql or model.generated_sql
         if not sql:
@@ -182,19 +190,23 @@ async def execute_query_node(state: SQLAssistantStateDict) -> SQLAssistantStateD
 
 
 async def format_result_node(state: SQLAssistantStateDict) -> SQLAssistantStateDict:
-    model = _state_model(state)
+    model = state_model(state)
     with log_node(model.session_id, model.thread_id, "format_result"):
         if model.final_response and model.final_response.rejection_reason:
             await save_state(model)
             return {}
 
+        risk_warning = (
+            "Warning: this query was classified as MEDIUM risk (bounded but potentially slow or broad). "
+            if model.risk_level == RiskLevel.MEDIUM
+            else ""
+        )
+
         if model.execution_result and model.execution_result.status == "ok":
-            warning = ""
-            if model.risk_level == RiskLevel.MEDIUM:
-                warning = " Warning: this was classified as MEDIUM risk but was bounded enough to execute."
             trunc = " Results were truncated to the configured maximum." if model.execution_result.truncated else ""
             message = (
-                f"Query executed successfully. Returned {model.execution_result.row_count} row(s).{warning}{trunc}"
+                f"{risk_warning}Query executed successfully. "
+                f"Returned {model.execution_result.row_count} row(s).{trunc}"
             )
             response = AssistantResponse(
                 message=message,
@@ -215,7 +227,7 @@ async def format_result_node(state: SQLAssistantStateDict) -> SQLAssistantStateD
 
         error = model.error or (model.execution_result.error_message if model.execution_result else "Unknown failure")
         response = AssistantResponse(
-            message=f"I could not execute the query: {error}",
+            message=f"{risk_warning}I could not execute the query: {error}",
             sql=model.approved_sql or model.generated_sql,
             risk_level=model.risk_level,
             risk_justification=model.risk_justification,
@@ -230,7 +242,7 @@ async def format_result_node(state: SQLAssistantStateDict) -> SQLAssistantStateD
 
 
 async def handle_error_node(state: SQLAssistantStateDict) -> SQLAssistantStateDict:
-    model = _state_model(state)
+    model = state_model(state)
     with log_node(model.session_id, model.thread_id, "handle_error"):
         error = model.error or "Unknown error"
         response = AssistantResponse(

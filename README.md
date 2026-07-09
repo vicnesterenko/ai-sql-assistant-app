@@ -135,7 +135,7 @@ In the frontend, set email/role in the top bar:
    - **Approve with changes** — approver edits the SQL, then it runs.
    - **Reject** — with a required reason.
 4. The requester's session resumes automatically (polling) and shows the final result or rejection reason.
-5. If no approver acts within `APPROVAL_TIMEOUT_MINUTES` (default 60), the request expires and the requester is notified.
+5. If no approver acts within `APPROVAL_TIMEOUT_MINUTES` (default 60), the request is marked expired the next time an approval endpoint is polled (`GET /api/approvals` or `GET /api/approvals/{id}`) — there is no background scheduler. In practice this happens when an approver's Approval panel is open and polling the queue; the requester's own session polling does not trigger it. Once expired, the requester's session picks up the "expired" result on its next poll.
 
 ## 10. Safety features
 
