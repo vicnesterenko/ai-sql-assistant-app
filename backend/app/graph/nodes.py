@@ -1,3 +1,5 @@
+import re
+
 from app.core.logger_setup import log_event, log_node
 from app.models.types import ApprovalStatus, AssistantResponse, RiskLevel, SQLAssistantState
 from app.services import audit_service
@@ -13,6 +15,27 @@ from app.graph.state import SQLAssistantStateDict
 
 def _state_model(state: SQLAssistantStateDict) -> SQLAssistantState:
     return SQLAssistantState.model_validate(state)
+
+
+MUTATION_VERB_TO_SQL_KEYWORD = {
+    r"\bdelete\b": "DELETE",
+    r"\bremove\b": "DELETE",
+    r"\bdrop\b": "DROP",
+    r"\btruncate\b": "TRUNCATE",
+    r"\binsert\b": "INSERT",
+    r"\bupdate\b": "UPDATE",
+    r"\balter\b": "ALTER",
+    r"\bgrant\b": "GRANT",
+    r"\brevoke\b": "REVOKE",
+}
+
+
+def _detect_mutation_keyword(*texts: str) -> str | None:
+    combined = " ".join(t for t in texts if t).lower()
+    for pattern, keyword in MUTATION_VERB_TO_SQL_KEYWORD.items():
+        if re.search(pattern, combined):
+            return keyword
+    return None
 
 
 async def parse_intent_node(state: SQLAssistantStateDict) -> SQLAssistantStateDict:
@@ -40,7 +63,14 @@ async def generate_sql_node(state: SQLAssistantStateDict) -> SQLAssistantStateDi
     with log_node(model.session_id, model.thread_id, "generate_sql"):
         if not model.intent:
             return {"error": "Intent is missing"}
-        sql = await llm_service.generate_sql(model.intent, previous_error=model.error, previous_sql=model.generated_sql)
+
+        mutation_keyword = _detect_mutation_keyword(model.intent.question, model.current_question)
+        if mutation_keyword:
+            sql = f"-- refused: request implies a {mutation_keyword} operation\n{mutation_keyword}"
+        else:
+            sql = await llm_service.generate_sql(
+                model.intent, previous_error=model.error, previous_sql=model.generated_sql
+            )
         if model.audit_id:
             await audit_service.update_audit(model.audit_id, generated_sql=sql)
         return {"generated_sql": sql, "error": None}
@@ -188,13 +218,17 @@ async def format_result_node(state: SQLAssistantStateDict) -> SQLAssistantStateD
             await save_state(model)
             return {}
 
+        risk_warning = (
+            "Warning: this query was classified as MEDIUM risk (bounded but potentially slow or broad). "
+            if model.risk_level == RiskLevel.MEDIUM
+            else ""
+        )
+
         if model.execution_result and model.execution_result.status == "ok":
-            warning = ""
-            if model.risk_level == RiskLevel.MEDIUM:
-                warning = " Warning: this was classified as MEDIUM risk but was bounded enough to execute."
             trunc = " Results were truncated to the configured maximum." if model.execution_result.truncated else ""
             message = (
-                f"Query executed successfully. Returned {model.execution_result.row_count} row(s).{warning}{trunc}"
+                f"{risk_warning}Query executed successfully. "
+                f"Returned {model.execution_result.row_count} row(s).{trunc}"
             )
             response = AssistantResponse(
                 message=message,
@@ -215,7 +249,7 @@ async def format_result_node(state: SQLAssistantStateDict) -> SQLAssistantStateD
 
         error = model.error or (model.execution_result.error_message if model.execution_result else "Unknown failure")
         response = AssistantResponse(
-            message=f"I could not execute the query: {error}",
+            message=f"{risk_warning}I could not execute the query: {error}",
             sql=model.approved_sql or model.generated_sql,
             risk_level=model.risk_level,
             risk_justification=model.risk_justification,
