@@ -106,7 +106,7 @@ def build_transactions(
 ) -> list[tuple]:
     transactions = []
 
-    for _ in range(15000):
+    for _ in range(10000):
         transactions.append(
             (
                 random.choice(user_ids),

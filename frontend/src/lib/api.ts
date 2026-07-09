@@ -5,6 +5,7 @@ export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH';
 export type AssistantResponse = {
   message: string;
   sql?: string | null;
+  original_sql?: string | null;
   risk_level?: RiskLevel | null;
   risk_justification?: string | null;
   assumptions: string[];
@@ -46,14 +47,18 @@ export type ApprovalItem = {
 export type AuditEntry = {
   id: string;
   session_id: string;
+  thread_id: string;
+  requester_email: string;
   question: string;
   generated_sql?: string | null;
   final_sql?: string | null;
   risk_level?: string | null;
+  approval_request_id?: string | null;
   execution_status?: string | null;
   execution_duration_ms?: number | null;
   row_count?: number | null;
   error_message?: string | null;
+  result_summary?: string | null;
   created_at: string;
 };
 

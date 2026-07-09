@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { AssistantResponse, createSession, getMessages, sendMessage } from '../lib/api';
 import { ResultTable } from './ResultTable';
 import { SqlBlock } from './SqlBlock';
+import { SqlDiff } from './SqlDiff';
 
 const EXAMPLE_QUESTIONS = [
   'How many new users signed up in April 2025, broken down by acquisition channel?',
@@ -41,13 +42,24 @@ function AssistantCard({ response }: { response: AssistantResponse }) {
       {response.assumptions?.length > 0 && (
         <ul className="assumptions">{response.assumptions.map((a) => <li key={a}>{a}</li>)}</ul>
       )}
+      {response.original_sql && response.sql && (
+        <SqlDiff originalSql={response.original_sql} modifiedSql={response.sql} />
+      )}
       {response.sql && <SqlBlock sql={response.sql} />}
       <ResultTable columns={response.columns ?? []} rows={response.rows ?? []} />
     </div>
   );
 }
 
-export function ChatPanel({ email, role }: { email: string; role: string }) {
+export function ChatPanel({
+  email,
+  role,
+  onSessionChange,
+}: {
+  email: string;
+  role: string;
+  onSessionChange?: (sessionId: string) => void;
+}) {
   const [sessionId, setSessionId] = useState<string>('');
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<{ id: string; role: string; content: string; response?: AssistantResponse | null }[]>([]);
@@ -57,6 +69,7 @@ export function ChatPanel({ email, role }: { email: string; role: string }) {
   async function start() {
     const s = await createSession(email, role);
     setSessionId(s.session_id);
+    onSessionChange?.(s.session_id);
     setMessages([]);
   }
 
