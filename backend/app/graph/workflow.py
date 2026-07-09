@@ -1,3 +1,21 @@
+"""
+Approver approves/rejects
+↓
+resume_after_approval()
+↓
+load_state або rebuild state по approval_id
+↓
+await_approval
+↓
+if approved:
+    execute_query
+    ↓
+    format_result
+↓
+if rejected:
+    format_result з rejection message
+"""
+
 from langgraph.graph import END, StateGraph
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -66,6 +84,7 @@ def route_execution(state: SQLAssistantStateDict) -> str:
 
 
 builder = StateGraph(SQLAssistantStateDict)
+
 builder.add_node("parse_intent", parse_intent_node)
 builder.add_node("generate_sql", generate_sql_node)
 builder.add_node("validate_sql", validate_sql_node)
@@ -80,15 +99,25 @@ builder.set_entry_point("parse_intent")
 builder.add_edge("parse_intent", "generate_sql")
 builder.add_edge("generate_sql", "validate_sql")
 builder.add_conditional_edges(
-    "validate_sql", route_validation, {"valid": "assess_risk", "retry": "generate_sql", "error": "handle_error"}
+    "validate_sql",
+    route_validation,
+    {"valid": "assess_risk", "retry": "generate_sql", "error": "handle_error"}
 )
-builder.add_conditional_edges("assess_risk", route_risk, {"execute": "execute_query", "high": "request_approval"})
+builder.add_conditional_edges(
+    "assess_risk",
+    route_risk,
+    {"execute": "execute_query", "high": "request_approval"}
+)
 builder.add_edge("request_approval", "await_approval")
 builder.add_conditional_edges(
-    "await_approval", route_approval, {"wait": END, "approved": "execute_query", "rejected": "format_result"}
+    "await_approval",
+    route_approval,
+    {"wait": END, "approved": "execute_query", "rejected": "format_result"}
 )
 builder.add_conditional_edges(
-    "execute_query", route_execution, {"ok": "format_result", "retry": "generate_sql", "done": "format_result"}
+    "execute_query",
+    route_execution,
+    {"ok": "format_result", "retry": "generate_sql", "done": "format_result"}
 )
 builder.add_edge("format_result", END)
 builder.add_edge("handle_error", END)
@@ -106,21 +135,30 @@ resume_builder.add_node("format_result", format_result_node)
 resume_builder.add_node("handle_error", handle_error_node)
 resume_builder.set_entry_point("await_approval")
 resume_builder.add_conditional_edges(
-    "await_approval", route_approval, {"wait": END, "approved": "execute_query", "rejected": "format_result"}
+    "await_approval",
+    route_approval,
+    {"wait": END, "approved": "execute_query", "rejected": "format_result"}
 )
 resume_builder.add_conditional_edges(
-    "execute_query", route_execution, {"ok": "format_result", "retry": "generate_sql", "done": "format_result"}
+    "execute_query",
+    route_execution,
+    {"ok": "format_result", "retry": "generate_sql", "done": "format_result"}
 )
 resume_builder.add_edge("generate_sql", "validate_sql")
 resume_builder.add_conditional_edges(
-    "validate_sql", route_validation, {"valid": "assess_risk", "retry": "generate_sql", "error": "handle_error"}
+    "validate_sql",
+    route_validation,
+    {"valid": "assess_risk", "retry": "generate_sql", "error": "handle_error"}
 )
 resume_builder.add_conditional_edges(
-    "assess_risk", route_risk, {"execute": "execute_query", "high": "request_approval"}
+    "assess_risk",
+    route_risk,
+    {"execute": "execute_query", "high": "request_approval"}
 )
 resume_builder.add_edge("request_approval", "await_approval")
 resume_builder.add_edge("format_result", END)
 resume_builder.add_edge("handle_error", END)
+
 compiled_resume_graph = resume_builder.compile(checkpointer=MemorySaver())
 
 

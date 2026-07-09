@@ -16,14 +16,6 @@ from app.resources.sql_query import (
 
 
 async def expire_old_pending() -> list[dict]:
-    """Mark overdue pending approvals as expired and return the rows that changed.
-
-    This module is pure CRUD over sql_approval_queue and must not depend on
-    app.graph.workflow (workflow.py already imports this module for
-    decision_from_row/get_approval, so the reverse import would be circular).
-    Callers that need to resume the waiting session and notify the requester
-    should use app.services.approval_orchestrator, which wraps this function.
-    """
     pool = get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(EXPIRE_OLD_PENDING_SQL, settings.approval_timeout_minutes)
