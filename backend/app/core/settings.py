@@ -53,6 +53,10 @@ class Settings(BaseSettings):
         default=20,
         validation_alias="REQUEST_RATE_LIMIT_PER_MINUTE",
     )
+    auto_seed_on_startup: bool = Field(
+        default=False,
+        validation_alias="AUTO_SEED_ON_STARTUP",
+    )
 
     @property
     def cors_origin_list(self) -> list[str]:
