@@ -1,6 +1,7 @@
 from app.core.logger_setup import log_event
 from app.db.pool import get_pool
 from app.resources.sql_query import COUNT_USERS_SQL
+from app.db.seed import main as run_seed_main
 
 
 async def seed_database_if_empty() -> None:
@@ -23,8 +24,6 @@ async def seed_database_if_empty() -> None:
             users_count=users_count,
         )
         return
-
-    from run_seed import main as run_seed_main
 
     await run_seed_main()
 
