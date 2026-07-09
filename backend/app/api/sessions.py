@@ -22,14 +22,22 @@ async def post_message(session_id: str, payload: ChatMessageRequest, user: Curre
     session = await get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+
     check_session_rate_limit(session_id)
     requester_email = session["requester_email"] or user.email
+
     await save_message(session_id, payload.thread_id, "user", payload.message)
+
     final_state = await run_message_graph(session_id, payload.thread_id, requester_email, payload.message)
+
     if not final_state.final_response:
         raise HTTPException(status_code=500, detail="Graph did not produce a response")
     await save_message(
-        session_id, payload.thread_id, "assistant", final_state.final_response.message, final_state.final_response
+        session_id=session_id,
+        thread_id=payload.thread_id,
+        role="assistant",
+        content=final_state.final_response.message,
+        response=final_state.final_response
     )
     return {"response": final_state.final_response}
 
