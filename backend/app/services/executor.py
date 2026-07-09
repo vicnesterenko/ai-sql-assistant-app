@@ -1,6 +1,6 @@
 import asyncio
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -16,6 +16,8 @@ from app.models.types import ExecutionResult
 def _jsonable(value: Any) -> Any:
     if isinstance(value, Decimal):
         return float(value)
+    if isinstance(value, timedelta):
+        return str(timedelta(seconds=round(value.total_seconds())))
     if isinstance(value, (datetime, date)):
         return value.isoformat()
     if isinstance(value, UUID):

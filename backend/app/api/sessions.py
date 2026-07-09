@@ -37,7 +37,7 @@ async def post_message(session_id: str, payload: ChatMessageRequest, user: Curre
         thread_id=payload.thread_id,
         role="assistant",
         content=final_state.final_response.message,
-        response=final_state.final_response
+        response=final_state.final_response,
     )
     return {"response": final_state.final_response}
 

@@ -99,25 +99,15 @@ builder.set_entry_point("parse_intent")
 builder.add_edge("parse_intent", "generate_sql")
 builder.add_edge("generate_sql", "validate_sql")
 builder.add_conditional_edges(
-    "validate_sql",
-    route_validation,
-    {"valid": "assess_risk", "retry": "generate_sql", "error": "handle_error"}
+    "validate_sql", route_validation, {"valid": "assess_risk", "retry": "generate_sql", "error": "handle_error"}
 )
-builder.add_conditional_edges(
-    "assess_risk",
-    route_risk,
-    {"execute": "execute_query", "high": "request_approval"}
-)
+builder.add_conditional_edges("assess_risk", route_risk, {"execute": "execute_query", "high": "request_approval"})
 builder.add_edge("request_approval", "await_approval")
 builder.add_conditional_edges(
-    "await_approval",
-    route_approval,
-    {"wait": END, "approved": "execute_query", "rejected": "format_result"}
+    "await_approval", route_approval, {"wait": END, "approved": "execute_query", "rejected": "format_result"}
 )
 builder.add_conditional_edges(
-    "execute_query",
-    route_execution,
-    {"ok": "format_result", "retry": "generate_sql", "done": "format_result"}
+    "execute_query", route_execution, {"ok": "format_result", "retry": "generate_sql", "done": "format_result"}
 )
 builder.add_edge("format_result", END)
 builder.add_edge("handle_error", END)
@@ -135,25 +125,17 @@ resume_builder.add_node("format_result", format_result_node)
 resume_builder.add_node("handle_error", handle_error_node)
 resume_builder.set_entry_point("await_approval")
 resume_builder.add_conditional_edges(
-    "await_approval",
-    route_approval,
-    {"wait": END, "approved": "execute_query", "rejected": "format_result"}
+    "await_approval", route_approval, {"wait": END, "approved": "execute_query", "rejected": "format_result"}
 )
 resume_builder.add_conditional_edges(
-    "execute_query",
-    route_execution,
-    {"ok": "format_result", "retry": "generate_sql", "done": "format_result"}
+    "execute_query", route_execution, {"ok": "format_result", "retry": "generate_sql", "done": "format_result"}
 )
 resume_builder.add_edge("generate_sql", "validate_sql")
 resume_builder.add_conditional_edges(
-    "validate_sql",
-    route_validation,
-    {"valid": "assess_risk", "retry": "generate_sql", "error": "handle_error"}
+    "validate_sql", route_validation, {"valid": "assess_risk", "retry": "generate_sql", "error": "handle_error"}
 )
 resume_builder.add_conditional_edges(
-    "assess_risk",
-    route_risk,
-    {"execute": "execute_query", "high": "request_approval"}
+    "assess_risk", route_risk, {"execute": "execute_query", "high": "request_approval"}
 )
 resume_builder.add_edge("request_approval", "await_approval")
 resume_builder.add_edge("format_result", END)
@@ -173,12 +155,7 @@ async def run_message_graph(session_id: str, thread_id: str, requester_email: st
     )
     result = await compiled_graph.ainvoke(
         state.model_dump(),
-        config={
-            "configurable":
-                {
-                    "thread_id": f"{session_id}:{thread_id}"
-                }
-        },
+        config={"configurable": {"thread_id": f"{session_id}:{thread_id}"}},
     )
     final_state = SQLAssistantState.model_validate(result)
     await save_state(final_state)
@@ -240,13 +217,7 @@ async def resume_after_approval(approval_id: str) -> SQLAssistantState | None:
     )
     result = await compiled_resume_graph.ainvoke(
         updated.model_dump(),
-        config={
-            "configurable":
-                {
-                    "thread_id":
-                        f"{updated.session_id}:{updated.thread_id}:{approval_id}"
-                }
-        },
+        config={"configurable": {"thread_id": f"{updated.session_id}:{updated.thread_id}:{approval_id}"}},
     )
     final_state = SQLAssistantState.model_validate(result)
     await save_state(final_state)

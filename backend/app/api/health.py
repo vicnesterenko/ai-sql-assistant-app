@@ -14,16 +14,6 @@ async def health() -> HealthResponse:
         async with pool.acquire() as conn:
             await conn.fetchval("SELECT 1")
         latency = int((time.perf_counter() - started) * 1000)
-        return HealthResponse(
-            status="ok",
-            message="success",
-            db_connected=True,
-            sample_query_latency_ms=latency
-        )
+        return HealthResponse(status="ok", message="success", db_connected=True, sample_query_latency_ms=latency)
     except Exception as e:
-        return HealthResponse(
-            status="degraded",
-            message=str(e),
-            db_connected=False,
-            sample_query_latency_ms=None
-        )
+        return HealthResponse(status="degraded", message=str(e), db_connected=False, sample_query_latency_ms=None)
