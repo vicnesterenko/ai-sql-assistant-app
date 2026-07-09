@@ -95,7 +95,6 @@ builder.add_edge("handle_error", END)
 
 compiled_graph = builder.compile(checkpointer=MemorySaver())
 
-# Separate resume graph starts from await_approval, so approval decisions do not replay parse/generate/validate/risk nodes.
 resume_builder = StateGraph(SQLAssistantStateDict)
 resume_builder.add_node("await_approval", await_approval_node)
 resume_builder.add_node("execute_query", execute_query_node)
@@ -136,7 +135,12 @@ async def run_message_graph(session_id: str, thread_id: str, requester_email: st
     )
     result = await compiled_graph.ainvoke(
         state.model_dump(),
-        config={"configurable": {"thread_id": f"{session_id}:{thread_id}"}},
+        config={
+            "configurable":
+                {
+                    "thread_id": f"{session_id}:{thread_id}"
+                }
+        },
     )
     final_state = SQLAssistantState.model_validate(result)
     await save_state(final_state)
@@ -184,9 +188,6 @@ async def resume_after_approval(approval_id: str) -> SQLAssistantState | None:
     decision: ApprovalDecision = decision_from_row(approval)
     state = await load_state(approval["session_id"], approval["thread_id"])
 
-    # If multiple pending approvals exist in the same session/thread, the snapshot
-    # may belong to another approval request. In that case, rebuild the exact state
-    # for the approval_id being resolved instead of resuming the wrong query.
     if not state or state.approval_request_id != approval_id:
         state = await _rebuild_state_from_approval_row(approval, decision)
 
@@ -201,7 +202,13 @@ async def resume_after_approval(approval_id: str) -> SQLAssistantState | None:
     )
     result = await compiled_resume_graph.ainvoke(
         updated.model_dump(),
-        config={"configurable": {"thread_id": f"{updated.session_id}:{updated.thread_id}:{approval_id}"}},
+        config={
+            "configurable":
+                {
+                    "thread_id":
+                        f"{updated.session_id}:{updated.thread_id}:{approval_id}"
+                }
+        },
     )
     final_state = SQLAssistantState.model_validate(result)
     await save_state(final_state)
