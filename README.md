@@ -16,28 +16,7 @@ Internal analytics tool that lets non-technical staff ask questions in plain lan
 - Every attempt — successful, blocked, or rejected — is written to an audit log.
 - A schema explorer lets users see what data is available before asking.
 
-## 2. Tech stack
-
-- **Python 3.12**, **FastAPI**
-- **LangGraph** / **LangChain** (+ `langchain-openai`) for orchestration
-- **PostgreSQL** (`asyncpg`)
-- **sqlglot** for SQL parsing/validation
-- **Pydantic** / **pydantic-settings** for typed models and config
-- **React** + **Vite** + **TypeScript** frontend
-- **Docker Compose** for local orchestration
-- **Poetry** for backend dependency management
-
-## 3. Architecture
-
-| Component | Responsibility |
-|---|---|
-| React frontend | Chat, approval panel, history, schema explorer |
-| FastAPI backend | HTTP API, auth headers, rate limiting |
-| LangGraph workflow | Orchestrates intent → SQL → validation → risk → execution |
-| PostgreSQL | App data (`users`, `transactions`, `loan_applications`) + approval queue + audit log |
-| Approval queue | Holds `HIGH` risk queries pending human review |
-| Audit log | Records every query attempt (generated SQL, risk, outcome) |
-| Mock LLM fallback | Deterministic keyword-based SQL templates, no OpenAI calls required |
+## 2. Architecture
 
 **Main flow:**
 
@@ -53,7 +32,7 @@ user question
   → audit (written throughout, not just at the end)
 ```
 
-## 4. Environment variables
+## 3. Environment variables
 
 Config is read from a single `.env` file at the repo root (used by `docker-compose.yml` and by the backend directly). Copy the template and fill in what you need:
 
@@ -82,7 +61,7 @@ Notes:
 - For Docker, `DATABASE_URL` must use host `postgres` (the compose service name), not `localhost`.
 - Never commit `.env` with a real `OPENAI_API_KEY` — it's git-ignored on purpose.
 
-## 5. How to run with Docker
+## 4. How to run with Docker
 
 ```bash
 docker compose up --build -d
@@ -94,7 +73,7 @@ Then open:
 - Backend API docs (Swagger): http://localhost:8000/docs
 - Health check: http://localhost:8000/health
 
-## 6. How to stop/reset
+## 5. How to stop/reset
 
 ```bash
 docker compose down
@@ -106,7 +85,7 @@ Full reset, including the database volume:
 docker compose down -v
 ```
 
-## 7. Demo questions
+## 6. Demo questions
 
 Valid against the actual schema (`users`, `transactions`, `loan_applications`):
 
@@ -121,7 +100,7 @@ Expected behavior:
 - "Give me everything from the users table" is a broad, unbounded scan of a sensitive table → classified `HIGH` risk → routed to the approval queue.
 - "Delete..." is a mutating statement → blocked at static validation, never reaches execution or approval.
 
-## 8. User roles
+## 7. User roles
 
 Auth is simplified via headers (no OAuth):
 
@@ -132,7 +111,7 @@ In the frontend, set email/role in the top bar:
 - **analyst** — can ask questions and see their own chat/history.
 - **approver** — additionally sees the Approval panel and can act on pending requests.
 
-## 9. Approval flow
+## 8. Approval flow
 
 1. A `HIGH` risk query is saved to the approval queue with status `pending`.
 2. The requester sees a "pending approval" state in chat instead of results.
@@ -143,7 +122,7 @@ In the frontend, set email/role in the top bar:
 4. The requester's session resumes automatically (polling) and shows the final result or rejection reason.
 5. If no approver acts within `APPROVAL_TIMEOUT_MINUTES` (default 60), the request is marked expired the next time an approval endpoint is polled (`GET /api/approvals` or `GET /api/approvals/{id}`) — there is no background scheduler. In practice this happens when an approver's Approval panel is open and polling the queue; the requester's own session polling does not trigger it. Once expired, the requester's session picks up the "expired" result on its next poll.
 
-## 10. Safety features
+## 9. Safety features
 
 - Only `SELECT` statements are ever executed.
 - Forbidden operations (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `TRUNCATE`, `ALTER`, `GRANT`, `REVOKE`, `EXEC`, `CALL`, `CREATE`) are blocked at static validation, before execution or approval.
@@ -155,7 +134,7 @@ In the frontend, set email/role in the top bar:
 - Every request — including blocked, rejected, and failed ones — produces an audit row.
 - Raw query results are never carried into LLM conversation context, only summaries.
 
-## 11. Mock LLM mode
+## 10. Mock LLM mode
 
 - Default mode (`USE_MOCK_LLM=true`) — for local testing and demos without OpenAI billing.
 - Uses deterministic, keyword-matched SQL templates (`backend/app/resources/mock_sql_query.py`) covering the demo questions above, including follow-ups.
@@ -163,7 +142,7 @@ In the frontend, set email/role in the top bar:
 - Switch to the real LLM with `USE_MOCK_LLM=false` and a valid `OPENAI_API_KEY`.
 - If OpenAI is unavailable, the service logs the error and falls back to deterministic mock SQL templates.
 
-## 12. Project structure
+## 11. Project structure
 
 ```
 backend/
@@ -186,14 +165,3 @@ docker-compose.yml
 .env.example
 README.md
 ```
-
-## 13. Testing checklist
-
-- [ ] Open the frontend, create a session.
-- [ ] Run a low-risk query (e.g. April 2025 signups) — expect immediate results.
-- [ ] Run a high-risk query ("everything from users") — expect pending-approval state.
-- [ ] Switch role to `approver`, approve the query — requester sees results.
-- [ ] Submit another high-risk query, reject it — requester sees the rejection reason.
-- [ ] Check the History panel shows all attempts with risk/status.
-- [ ] Check the Schema Explorer lists tables and columns.
-- [ ] Try "Delete all test users from the database" — expect it blocked, never executed.
