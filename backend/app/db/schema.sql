@@ -93,14 +93,11 @@ CREATE TABLE IF NOT EXISTS graph_state_snapshots (
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at);
-CREATE INDEX IF NOT EXISTS idx_users_acquisition_channel ON users(acquisition_channel);
-CREATE INDEX IF NOT EXISTS idx_users_is_test ON users(is_test_account);
+CREATE INDEX IF NOT EXISTS idx_users_is_test_account ON users(is_test_account) WHERE is_test_account = true;
 CREATE INDEX IF NOT EXISTS idx_loan_applications_user_id ON loan_applications(user_id);
 CREATE INDEX IF NOT EXISTS idx_loan_applications_submitted_at ON loan_applications(submitted_at);
-CREATE INDEX IF NOT EXISTS idx_loan_applications_status ON loan_applications(status);
 CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at);
-CREATE INDEX IF NOT EXISTS idx_transactions_merchant_name ON transactions(merchant_name);
 CREATE INDEX IF NOT EXISTS idx_approval_status ON sql_approval_queue(status);
 CREATE INDEX IF NOT EXISTS idx_audit_session ON sql_query_audit(session_id);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON chat_messages(session_id, created_at);
