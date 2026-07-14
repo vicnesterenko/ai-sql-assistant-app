@@ -1,6 +1,6 @@
 """
     Обмеження кількості запитів для кожної чат-сесії.
-    Redis Imitation
+    Redis
 """
 
 import time
