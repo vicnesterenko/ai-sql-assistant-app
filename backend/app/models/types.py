@@ -1,4 +1,4 @@
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any, Literal
 from pydantic import BaseModel, Field
 
@@ -7,6 +7,11 @@ class RiskLevel(str, Enum):
     LOW = "LOW"
     MEDIUM = "MEDIUM"
     HIGH = "HIGH"
+
+
+class UserRole(StrEnum):
+    ANALYST = "analyst"
+    APPROVER = "approver"
 
 
 class ApprovalStatus(str, Enum):
@@ -96,6 +101,18 @@ class AssistantResponse(BaseModel):
     )
 
 
+class MessageRecord(BaseModel):
+    id: str
+    role: Literal["user", "assistant"]
+    content: str
+    created_at: str
+    response: AssistantResponse | None = None
+
+
+class MessageListResponse(BaseModel):
+    messages: list[MessageRecord]
+
+
 class SQLAssistantState(BaseModel):
     session_id: str = Field(description="Conversation session identifier.")
     thread_id: str = Field(description="LangGraph thread identifier for checkpointing/resumability.")
@@ -138,14 +155,6 @@ class SessionResponse(BaseModel):
 class ChatMessageRequest(BaseModel):
     message: str
     thread_id: str = "default"
-
-
-class MessageRecord(BaseModel):
-    id: str
-    role: Literal["user", "assistant"]
-    content: str
-    created_at: str
-    response: AssistantResponse | None = None
 
 
 class ApprovalItem(BaseModel):
