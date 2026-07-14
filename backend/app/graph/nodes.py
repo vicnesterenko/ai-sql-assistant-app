@@ -4,7 +4,7 @@ from typing import Any
 
 from app.core.logger_setup import log_event, log_node
 from app.graph.state import SQLAssistantState
-from app.models.types import ApprovalStatus, AssistantResponse, RiskLevel
+from app.models.types import ApprovalDecision, ApprovalStatus, AssistantResponse, RiskLevel
 from app.services import audit_service
 from app.services.approval_service import create_approval_request
 from app.services.executor import execute_readonly_sql
@@ -248,17 +248,30 @@ async def request_approval_node(
 async def await_approval_node(
     state: SQLAssistantState,
 ) -> StateUpdate:
-    """Обробляє рішення approver і готує workflow до продовження."""
+    """Призупиняє HIGH-risk запит і обробляє рішення approver."""
 
     with log_node(
         state.session_id,
         state.thread_id,
         "await_approval",
     ):
-        decision = state.approval_decision
+        decision_payload = interrupt(
+            {
+                "type": "sql_approval",
+                "approval_request_id": state.approval_request_id,
+                "sql": state.generated_sql,
+                "risk_level": (
+                    state.risk_level.value
+                    if state.risk_level
+                    else RiskLevel.HIGH.value
+                ),
+                "risk_justification": state.risk_justification,
+            }
+        )
 
-        if not decision:
-            return {}
+        decision = ApprovalDecision.model_validate(
+            decision_payload
+        )
 
         if decision.status == ApprovalStatus.APPROVED:
             final_sql = (
@@ -266,47 +279,50 @@ async def await_approval_node(
                 or state.generated_sql
             )
 
+            if not final_sql:
+                return {
+                    "approval_decision": decision,
+                    "approved_sql": None,
+                    "error": "Approved SQL is missing.",
+                    "final_response": None,
+                }
+
             return {
+                "approval_decision": decision,
                 "approved_sql": final_sql,
                 "error": None,
                 "final_response": None,
             }
 
-        if decision.status in {
-            ApprovalStatus.REJECTED,
-            ApprovalStatus.EXPIRED,
-        }:
-            reason = (
-                decision.rejection_reason
-                or "The query was not approved."
+        reason = (
+            decision.rejection_reason
+            or "The query was not approved."
+        )
+
+        response = AssistantResponse(
+            message=f"The query was not executed: {reason}",
+            sql=state.generated_sql,
+            risk_level=state.risk_level,
+            risk_justification=state.risk_justification,
+            pending_approval=False,
+            approval_request_id=state.approval_request_id,
+            rejection_reason=reason,
+            audit_id=state.audit_id,
+            execution_status=decision.status.value,
+        )
+
+        if state.audit_id:
+            await audit_service.update_audit(
+                state.audit_id,
+                execution_status=decision.status.value,
+                error_message=reason,
             )
-            execution_status = decision.status.value
 
-            response = AssistantResponse(
-                message=f"The query was not executed: {reason}",
-                sql=state.generated_sql,
-                risk_level=state.risk_level,
-                risk_justification=state.risk_justification,
-                pending_approval=False,
-                approval_request_id=state.approval_request_id,
-                rejection_reason=reason,
-                audit_id=state.audit_id,
-                execution_status=str(execution_status),
-            )
-
-            if state.audit_id:
-                await audit_service.update_audit(
-                    state.audit_id,
-                    execution_status=str(execution_status),
-                    error_message=reason,
-                )
-
-            return {
-                "final_response": response,
-                "error": reason,
-            }
-
-        return {}
+        return {
+            "approval_decision": decision,
+            "final_response": response,
+            "error": reason,
+        }
 
 
 async def execute_query_node(
@@ -566,3 +582,21 @@ async def handle_error_node(
         await save_state(new_state)
 
         return {"final_response": response}
+
+def route_approval(
+    state: SQLAssistantState,
+) -> str:
+    """Маршрутизує отримане рішення approver."""
+
+    if not state.approval_decision:
+        raise RuntimeError(
+            "Approval node completed without an approval decision."
+        )
+
+    if (
+        state.approval_decision.status
+        == ApprovalStatus.APPROVED
+    ):
+        return "approved"
+
+    return "rejected"

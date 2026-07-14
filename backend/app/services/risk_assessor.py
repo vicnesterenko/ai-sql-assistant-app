@@ -7,22 +7,42 @@ from app.services.schema_service import is_large_table, is_sensitive_table
 SENSITIVE_COLUMNS = {"email", "full_name", "rejection_reason"}
 
 
-def _is_broad_star_projection(expr: exp.Expression) -> bool:
-    """Detect SELECT * / SELECT table.* only in the output list.
+def _sensitive_output_columns(
+    expr: exp.Expression,
+) -> list[str]:
+    """Повертає чутливі колонки, що реально виходять у результат."""
 
-    COUNT(*) is safe aggregate syntax and must not be treated as broad data exposure.
-    The previous implementation counted the star inside COUNT(*) and incorrectly
-    pushed normal aggregate questions to HIGH risk.
-    """
-    if not isinstance(expr, exp.Select):
-        return False
-    for projection in expr.expressions:
-        # SELECT *
-        if isinstance(projection, exp.Star):
-            return True
-        # SELECT users.*
-        if isinstance(projection, exp.Column) and isinstance(projection.this, exp.Star):
-            return True
+    found: set[str] = set()
+
+    for select in expr.find_all(exp.Select):
+        for projection in select.expressions:
+            # Агрегат не повертає raw значення колонки.
+            if projection.find(exp.AggFunc):
+                continue
+
+            for column in projection.find_all(exp.Column):
+                if column.name in SENSITIVE_COLUMNS:
+                    found.add(column.name)
+
+    return sorted(found)
+
+
+def _has_broad_star_projection(
+    expr: exp.Expression,
+) -> bool:
+    """Виявляє SELECT * або table.* у будь-якій проєкції."""
+
+    for select in expr.find_all(exp.Select):
+        for projection in select.expressions:
+            if isinstance(projection, exp.Star):
+                return True
+
+            if (
+                isinstance(projection, exp.Column)
+                and isinstance(projection.this, exp.Star)
+            ):
+                return True
+
     return False
 
 
@@ -45,8 +65,8 @@ def assess_risk(sql: str, validation: ValidationResult) -> tuple[RiskLevel, str]
         return RiskLevel.HIGH, "SQL cannot be parsed during risk assessment."
 
     has_where = expr.find(exp.Where) is not None
-    has_limit = expr.find(exp.Limit) is not None
-    has_broad_star = _is_broad_star_projection(expr)
+    has_limit = expr.args.get("limit") is not None
+    has_broad_star = _has_broad_star_projection(expr)
     has_aggregation = _has_aggregation(expr)
     join_count = len(list(expr.find_all(exp.Join)))
     subquery_count = len(list(expr.find_all(exp.Subquery)))
@@ -54,8 +74,7 @@ def assess_risk(sql: str, validation: ValidationResult) -> tuple[RiskLevel, str]
     large_tables = [t for t in referenced_tables if is_large_table(t)]
     sensitive_tables = [t for t in referenced_tables if is_sensitive_table(t)]
 
-    column_names = {col.split(".")[-1] for col in validation.referenced_columns}
-    sensitive_cols = sorted(column_names & SENSITIVE_COLUMNS)
+    sensitive_cols = _sensitive_output_columns(expr)
 
     score = 0
 
