@@ -1,7 +1,9 @@
 docker compose down
-docker compose up --build -d
 docker compose config --services
 docker compose down -v ( видалить усі контейнери )
+
+docker compose up --build -d
+docker compose exec backend python run_seed.py
 
 docker compose exec postgres psql -U postgres -d ai_sql_assistant
 docker compose config --services
