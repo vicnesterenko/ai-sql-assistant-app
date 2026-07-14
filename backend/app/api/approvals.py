@@ -32,6 +32,7 @@ async def list_approval_endpoint(
     return ApprovalListResponse(items=[ApprovalItem.model_validate(x) for x in items], total=total)
 
 # отримання одного approval - GET /api/approvals/approval-123
+@router.get("/{approval_id}", response_model=ApprovalItem)
 async def get_approval_endpoint(
     approval_id: str,
     user: CurrentUser = Depends(get_current_user),

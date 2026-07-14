@@ -1,0 +1,15 @@
+LOW risk
+-How many users do we have?
+
+MEDIUM risk
+-Show the last 20 successful transactions.
+
+HIGH risk
+-Give me everything from the users table.
+
+Follow-up questions
+-Show the number of applications grouped by status.
+-Now only for 2025.
+
+Delete
+- Delete all users.
