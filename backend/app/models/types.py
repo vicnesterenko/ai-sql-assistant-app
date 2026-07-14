@@ -1,4 +1,4 @@
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any, Literal
 from pydantic import BaseModel, Field
 
@@ -7,6 +7,10 @@ class RiskLevel(str, Enum):
     LOW = "LOW"
     MEDIUM = "MEDIUM"
     HIGH = "HIGH"
+
+class UserRole(StrEnum):
+    ANALYST = "analyst"
+    APPROVER = "approver"
 
 
 class ApprovalStatus(str, Enum):
@@ -96,36 +100,6 @@ class AssistantResponse(BaseModel):
     )
 
 
-class SQLAssistantState(BaseModel):
-    session_id: str = Field(description="Conversation session identifier.")
-    thread_id: str = Field(description="LangGraph thread identifier for checkpointing/resumability.")
-    requester_email: str = Field(description="Email of the user who asked the question.")
-    messages: list[dict[str, str]] = Field(
-        default_factory=list, description="Conversation message history containing roles and sanitized content."
-    )
-    current_question: str = Field(description="Current raw user message.")
-    intent: Intent | None = Field(default=None, description="Structured intent produced by parse_intent.")
-    generated_sql: str | None = Field(default=None, description="LLM-proposed SQL before validation and approval.")
-    validation_result: ValidationResult | None = Field(default=None, description="Static SQL validation output.")
-    risk_level: RiskLevel | None = Field(default=None, description="Risk classification for the validated SQL.")
-    risk_justification: str | None = Field(default=None, description="Human-readable risk rationale.")
-    approval_request_id: str | None = Field(default=None, description="Approval queue ID for high-risk queries.")
-    approval_decision: ApprovalDecision | None = Field(
-        default=None, description="Human approval decision when graph resumes."
-    )
-    approved_sql: str | None = Field(
-        default=None, description="Final SQL after approval, possibly modified by approver."
-    )
-    execution_result: ExecutionResult | None = Field(default=None, description="Database execution output.")
-    retry_count: int = Field(default=0, description="Validation or execution retry counter.")
-    execution_retry_count: int = Field(default=0, description="Execution correction retry counter.")
-    error: str | None = Field(default=None, description="Current error to be handled by handle_error.")
-    final_response: AssistantResponse | None = Field(
-        default=None, description="Final API response returned to frontend."
-    )
-    audit_id: str | None = Field(default=None, description="Audit row ID for this attempt.")
-
-
 class CreateSessionRequest(BaseModel):
     requester_email: str
 
@@ -133,6 +107,11 @@ class CreateSessionRequest(BaseModel):
 class SessionResponse(BaseModel):
     session_id: str
     created_at: str
+
+
+class ResponseSchema(BaseModel):
+    status: str
+    message: str
 
 
 class ChatMessageRequest(BaseModel):
@@ -146,6 +125,10 @@ class MessageRecord(BaseModel):
     content: str
     created_at: str
     response: AssistantResponse | None = None
+
+
+class MessageListResponse(BaseModel):
+    messages: list[MessageRecord]
 
 
 class ApprovalItem(BaseModel):
@@ -223,5 +206,5 @@ class SchemaResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     message: str
-    db_connected: bool
+    db_connected: bool | None = None
     sample_query_latency_ms: int | None = None

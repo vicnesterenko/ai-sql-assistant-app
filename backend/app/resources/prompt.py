@@ -4,6 +4,23 @@ from textwrap import dedent
 from app.models.types import Intent
 
 
+READABLE_SCHEMA_PROMPT = """
+Allowed PostgreSQL schema:
+
+users(id UUID PK, email TEXT, full_name TEXT, acquisition_channel TEXT, created_at TIMESTAMPTZ, is_test_account BOOLEAN, is_deleted BOOLEAN)
+loan_applications(id UUID PK, user_id UUID FK users.id, requested_amount NUMERIC, approved_amount NUMERIC, status TEXT, submitted_at TIMESTAMPTZ, decided_at TIMESTAMPTZ, rejection_reason TEXT)
+transactions(id UUID PK, user_id UUID FK users.id, merchant_name TEXT, merchant_category TEXT, amount NUMERIC, currency TEXT, status TEXT, created_at TIMESTAMPTZ)
+
+Business notes:
+- New users means users.created_at.
+- Test accounts should usually be excluded with users.is_test_account = false when the request says exclude internal/test accounts.
+- Deleted users should usually be excluded with users.is_deleted = false.
+- Transaction volume means SUM(transactions.amount), usually for transactions.status = 'success'.
+- Loan approval time means decided_at - submitted_at for rows with decided_at IS NOT NULL.
+- Return PostgreSQL SELECT only. Never use mutation statements.
+""".strip()
+
+
 def build_parse_intent_prompt(history: list[dict[str, str]], previous_sql: str | None, question: str) -> str:
     safe_history = history[-6:] if history else []
 

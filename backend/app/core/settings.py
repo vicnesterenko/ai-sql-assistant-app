@@ -1,3 +1,5 @@
+"""Централізоване завантаження конфігурації застосунку зі змінних середовища."""
+
 from functools import lru_cache
 from pathlib import Path
 
@@ -10,6 +12,8 @@ ENV_FILE = PROJECT_ROOT / ".env"
 
 
 class Settings(BaseSettings):
+    """Налаштування бази даних, LLM, безпеки та API застосунку."""
+
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,
         env_file_encoding="utf-8",
@@ -35,14 +39,17 @@ class Settings(BaseSettings):
     )
     query_timeout_seconds: int = Field(
         default=30,
+        ge=1,
         validation_alias="QUERY_TIMEOUT_SECONDS",
     )
     max_result_rows: int = Field(
         default=1000,
+        ge=1,
         validation_alias="MAX_RESULT_ROWS",
     )
     approval_timeout_minutes: int = Field(
         default=60,
+        ge=1,
         validation_alias="APPROVAL_TIMEOUT_MINUTES",
     )
     cors_origins: str = Field(
@@ -51,16 +58,30 @@ class Settings(BaseSettings):
     )
     request_rate_limit_per_minute: int = Field(
         default=20,
+        ge=1,
         validation_alias="REQUEST_RATE_LIMIT_PER_MINUTE",
     )
 
     @property
     def cors_origin_list(self) -> list[str]:
-        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+        """
+            Повертає список дозволених CORS-джерел.
+            CORS визначає, з яких frontend origins браузеру дозволено звертатися до API.
+            У моєму проєкті локальний Vite frontend працює на порту 5173, а FastAPI — на 8000,
+            тому backend явно дозволяє origin frontend-застосунку через CORSMiddleware.
+        """
+
+        return [
+            origin.strip()
+            for origin in self.cors_origins.split(",")
+            if origin.strip()
+        ]
 
 
 @lru_cache
 def get_settings() -> Settings:
+    """Створює та кешує єдиний екземпляр налаштувань - Singleton"""
+
     return Settings()
 
 

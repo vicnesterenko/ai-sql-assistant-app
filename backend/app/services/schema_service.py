@@ -1,4 +1,16 @@
+"""
+Отримати автоматом схеми з БД
+SELECT
+    c.table_name,
+    c.column_name,
+    c.data_type,
+    c.is_nullable
+FROM information_schema.columns AS c
+WHERE c.table_schema = 'public';
+"""
 from app.models.types import ColumnSchema, SchemaResponse, TableSchema
+from app.resources.prompt import READABLE_SCHEMA_PROMPT
+
 
 SCHEMA: dict[str, dict] = {
     "users": {
@@ -124,22 +136,6 @@ COLUMN_TYPES: dict[str, dict[str, str]] = {
     "sql_query_audit": {k: "text" for k in SCHEMA["sql_query_audit"]["columns"]},
 }
 
-READABLE_SCHEMA_PROMPT = """
-Allowed PostgreSQL schema:
-
-users(id UUID PK, email TEXT, full_name TEXT, acquisition_channel TEXT, created_at TIMESTAMPTZ, is_test_account BOOLEAN, is_deleted BOOLEAN)
-loan_applications(id UUID PK, user_id UUID FK users.id, requested_amount NUMERIC, approved_amount NUMERIC, status TEXT, submitted_at TIMESTAMPTZ, decided_at TIMESTAMPTZ, rejection_reason TEXT)
-transactions(id UUID PK, user_id UUID FK users.id, merchant_name TEXT, merchant_category TEXT, amount NUMERIC, currency TEXT, status TEXT, created_at TIMESTAMPTZ)
-
-Business notes:
-- New users means users.created_at.
-- Test accounts should usually be excluded with users.is_test_account = false when the request says exclude internal/test accounts.
-- Deleted users should usually be excluded with users.is_deleted = false.
-- Transaction volume means SUM(transactions.amount), usually for transactions.status = 'success'.
-- Loan approval time means decided_at - submitted_at for rows with decided_at IS NOT NULL.
-- Return PostgreSQL SELECT only. Never use mutation statements.
-""".strip()
-
 
 def get_schema_response() -> SchemaResponse:
     tables: list[TableSchema] = []
@@ -148,7 +144,10 @@ def get_schema_response() -> SchemaResponse:
         for col, desc in meta["columns"].items():
             columns.append(
                 ColumnSchema(
-                    name=col, data_type=COLUMN_TYPES[table_name].get(col, "text"), nullable=True, description=desc
+                    name=col,
+                    data_type=COLUMN_TYPES[table_name].get(col, "text"),
+                    nullable=True,
+                    description=desc
                 )
             )
         tables.append(

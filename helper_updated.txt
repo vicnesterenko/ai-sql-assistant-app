@@ -1,0 +1,2014 @@
+-------------------------------------------------
+InMemorySaver - An in-memory checkpoint saver.
+This checkpoint saver stores checkpoints in memory using a defaultdict.
+-------------------------------------------------
+AsyncPostgresStore
+Asynchronous Postgres-backed store with optional vector search using pgvector.
+setup()
+This method creates the necessary tables in the Postgres database if they don't already exist and runs database migrations.
+It MUST be called directly by the user the first time the store is used.
+-------------------------------------------------
+add_node - Add a new node to the StateGraph
+Додати спрямоване ребро від початкового вузла (або списку початкових вузлів) до кінцевого вузла.
+Якщо вказано один початковий вузол, граф чекатиме на завершення цього вузла перед виконанням кінцевого вузла.
+Якщо вказано кілька початкових вузлів, граф чекатиме на завершення ВСІХ початкових вузлів перед виконанням кінцевого вузла.
+-------------------------------------------------
+add_edge
+Додати умовне ребро від початкового вузла до будь-якої кількості кінцевих вузлів.
+-------------------------------------------------
+add_conditional_edges
+Add a conditional edge from the starting node to any number of destination nodes.
+-------------------------------------------------
+set_entry_point
+Specifies the first node to be called in the graph.
+-------------------------------------------------
+interrupt
+Переривання графа за допомогою винятку, що відновлюється, з вузла.
+Функція переривання дозволяє виконувати робочі процеси з участю людини в циклі, призупиняючи виконання графа та виводячи значення клієнту.
+Це значення може передавати контекст або запитувати вхідні дані, необхідні для відновлення виконання.
+У заданому вузлі перший виклик цієї функції викликає виняток GraphInterrupt, зупиняючи виконання.
+Надане значення додається до винятку та надсилається клієнту, який виконує граф.
+Клієнт, який відновлює граф, повинен використовувати примітив Command, щоб вказати значення для переривання та продовжити виконання.
+Граф відновлюється з початку вузла, повторно виконуючи всю логіку.
+Якщо вузол містить кілька викликів переривань, LangGraph зіставляє значення відновлення з перериваннями на основі їхнього порядку у вузлі.
+Цей список значень відновлення обмежений конкретним завданням, яке виконує вузол, і не використовується між завданнями.
+Щоб використовувати переривання, необхідно ввімкнути контрольну точку, оскільки ця функція залежить від збереження стану графа.
+-------------------------------------------------
+Docker упаковує застосунок разом із залежностями в контейнер, щоб він однаково працював у різних середовищах.
+Docker Compose потрібен для одночасного запуску кількох пов’язаних контейнерів.
+На відміну від віртуальної машини,
+Docker-контейнер не має власної повної операційної системи, тому він легший і швидше запускається
+-------------------------------------------------
+LangChain я все одно використовую для інтеграції з ChatOpenAI,
+але LangGraph відповідає за orchestration: state, conditional edges, retry loops і pause/resume.
+Для простого лінійного LLM-виклику LangChain було б достатньо, але для цього workflow LangGraph підходить краще.
+-------------------------------------------------
+1. Чому для цього проєкту обраний LangGraph?
+Я обрала LangGraph, тому що процес генерації SQL нелінійний і stateful (зберігає стан клієнту)
+Після генерації запит може повернутися на retry, піти на виконання або на human approval.
+LangChain використовується для інтеграції з LLM, а LangGraph — як orchestration layer для state, conditional edges,
+retries і approval flow. Для одного лінійного LLM-виклику LangChain було б достатньо, але для цього сценарію граф підходить краще.
+Checkpointers у LangGraph спеціально підтримують conversation continuity, human-in-the-loop і fault tolerance.
+-------------------------------------------------
+2.Як працює state і conditional routing?
+State — це спільний типізований контейнер даних одного workflow. (cтан, зберігається при кожній зміни )
+Nodes читають із нього потрібні поля та повертають часткові оновлення.
+
+Routing-функції аналізують state і повертають route key.
+Наприклад, після validation валідний SQL переходить на risk assessment,
+невалідний — на повторну генерацію,
+а після вичерпання retry — у handle error.
+-------------------------------------------------
+3. Як реалізований human-in-the-loop approval?
+У тестовому approval реалізований через approval queue та окремий resume graph.
+Для HIGH-risk запиту я зберігаю approval request і завершую поточний run.
+Після рішення approver завантажую state та продовжую процес із await_approval.
+Для production я замінила б це на нативні interrupt() і Command(resume=...) із PostgreSQL checkpointer.
+-------------------------------------------------
+4. Чому MemorySaver не підходить для production?
+MemorySaver підходить для тестів і локального MVP, але не для production, тому що зберігає checkpoints лише в пам’яті одного процесу.
+Після restart або при кількох replicas state буде втрачений або розділений.
+У моєму тестовому є додаткове збереження state в PostgreSQL, але правильніше мати один persistent LangGraph checkpointer.
+-------------------------------------------------
+5. Як Text-to-SQL захищений від destructive SQL?
+LLM створює лише candidate SQL і не має прямого доступу до бази.
+SQL проходить AST validation, schema validation, risk assessment та за потреби approval.
+У production останнім бар’єром має бути окрема read-only PostgreSQL role зі statement timeout.
+Навіть якщо LLM або application validator помиляться, база не повинна дозволити зміну даних.
+-------------------------------------------------
+7. Чому LLM не можна вважати security boundary?
+LLM не є security boundary, тому що її відповіді недетерміновані й можуть змінюватися під впливом prompt injection.
+Модель може рекомендувати дію, але не повинна самостійно визначати, чи дозволено її виконувати.
+Security boundary у моєму випадку — це Python validation, risk policies, approval і PostgreSQL permissions.
+-------------------------------------------------
+8. Як працює AST validation через sqlglot?
+sqlglot парсить SQL у AST.
+Я обходжу дерево та перевіряю тип statement, таблиці, колонки й заборонені operations.
+Це надійніше за regex, тому що аналізується семантична структура запиту, а не просто текстові збіги.
+-------------------------------------------------
+9. Як захищатися від prompt injection?
+Prompt injection не можна вирішити лише sanitization або system prompt.
+Я розділяю instructions і user data, не даю моделі прямого доступу до database tools і обов’язково валідую її output детермінованим кодом.
+Навіть якщо injection змусить модель згенерувати destructive SQL, AST validator і read-only database role повинні його заблокувати.
+
+Потрібен багаторівневий захист:
+system instructions окремо від user data;
+не вставляти user text як довірені instructions;
+мінімальні LLM permissions;
+не давати LLM прямий DB execution tool;
+AST validation output;
+read-only DB role;
+allowlist tables і operations;
+logging і detection підозрілих prompts;
+adversarial evaluation;
+для RAG — вважати тексти документів недовіреним content.
+-------------------------------------------------
+10. Як оцінювати ризик SQL-запиту?
+
+Data risk:
+чи має користувач право бачити ці дані?
+Compute risk:
+скільки ресурсів витратить запит?
+
+У тестовому risk assessment базується на прозорих евристиках:
+sensitive tables, відсутність WHERE і LIMIT, кількість joins та ширина діапазону.
+Для production я додала б EXPLAIN FORMAT JSON та оцінювала estimated rows, total cost і sequential scans.
+Також окремо рахувала б data sensitivity і computational cost.
+-------------------------------------------------
+11. Як забезпечити idempotent approval і execution?
+Idempotency я б забезпечила на рівні бази, а не лише Python-коду.
+Approval row потрібно блокувати через
+SELECT FOR UPDATE і дозволяти тільки atomic transition pending → approved/rejected.
+Для execution я б використовувала унікальний idempotency key, наприклад approval_id,
+щоб один approval не міг створити два execution jobs.
+-------------------------------------------------
+12. Як побудувати RAG для банківських документів з ACL?
+У банківському RAG ACL metadata повинні зберігатися разом із документами й chunks.
+Після authentication система визначає user and group permissions і застосовує security filter до vector та keyword retrieval.
+Лише authorized chunks можуть потрапити в context LLM.
+ACL у search engine — це додатковий filter, але не заміна upstream authentication.
+-------------------------------------------------
+15. Що конкретно покращити в тестовому перед production?
+Перед production я б передусім посилила persistence, security та idempotency.
+Перевела б checkpoints на PostgreSQL, використала нативний interrupt/resume, додала read-only DB role, transactional approval і unique execution key.
+SQL, змінений approver, обов’язково проходив би повторну validation.
+Далі додала б EXPLAIN-based risk assessment, distributed rate limiting, structured LLM output, authentication, observability та evaluation dataset.
+Поточну реалізацію я вважаю функціональним MVP, але не завершеним production-рішенням.
+
+=================================================
+ДОДАТКОВІ ПИТАННЯ ПО PYTHON / FASTAPI
+=================================================
+
+16. Чим async-функція відрізняється від звичайної функції?
+
+Функція, оголошена через async def, при виклику повертає coroutine object.
+Вона виконується, коли її очікують через await або планують в event loop.
+
+У моєму проєкті async використовується для:
+- викликів OpenAI API;
+- роботи з PostgreSQL через asyncpg;
+- запуску LangGraph;
+- FastAPI endpoints.
+
+Це I/O-bound операції. Поки програма очікує мережу або базу,
+event loop може обробляти інші запити.
+
+Готова відповідь:
+Async не прискорює самі обчислення. Він дозволяє не блокувати потік під час очікування I/O.
+Для CPU-bound обчислень потрібні multiprocessing, worker pool або окремий сервіс.
+
+
+-------------------------------------------------
+17. Що робить await?
+
+await призупиняє поточну coroutine до завершення awaitable-операції
+та повертає керування event loop.
+
+Наприклад:
+
+msg = await self._model.ainvoke(prompt)
+
+Поки OpenAI API формує відповідь, сервер може виконувати інші tasks.
+
+await не створює новий потік і не означає автоматичний паралелізм.
+Він дає cooperative concurrency: задача добровільно віддає керування event loop.
+
+
+-------------------------------------------------
+18. Що таке event loop?
+
+Event loop — цикл, який:
+- запускає coroutines і tasks;
+- стежить, які I/O-операції завершились;
+- поновлює призупинені tasks;
+- виконує callbacks.
+
+У FastAPI/uvicorn event loop обробляє HTTP-запити,
+LLM-виклики та запити до asyncpg без блокування одного запиту іншим.
+
+
+-------------------------------------------------
+19. Чим coroutine відрізняється від Task?
+
+Coroutine — результат виклику async-функції:
+
+coro = some_async_function()
+
+Task — coroutine, яку event loop уже запланував:
+
+task = asyncio.create_task(some_async_function())
+
+await coro виконує coroutine та очікує її.
+create_task корисний, коли кілька незалежних операцій треба запускати конкурентно.
+
+У моєму workflow більшість операцій залежить одна від одної,
+тому вони виконуються послідовно через await.
+
+
+-------------------------------------------------
+20. Що робить ainvoke у моєму проєкті?
+
+Назва ainvoke однакова, але поведінка залежить від об’єкта.
+
+1. ChatOpenAI:
+
+msg = await self._model.ainvoke(prompt)
+
+Вхід: prompt або messages.
+Результат: AIMessage.
+Метод асинхронно викликає LLM.
+
+2. compiled_graph:
+
+result = await compiled_graph.ainvoke(state, config=...)
+
+Вхід: state.
+Результат: фінальний оновлений state.
+Метод запускає весь LangGraph workflow.
+
+Готова відповідь:
+Потрібно дивитися не лише на назву ainvoke,
+а й на те, на якому Runnable-об’єкті вона викликається.
+
+
+-------------------------------------------------
+21. Навіщо використовується connection pool?
+
+Створення нового DB connection для кожного HTTP-запиту є дорогим.
+
+asyncpg pool:
+- створює обмежений набір готових підключень;
+- видає підключення через pool.acquire();
+- повертає його назад після завершення;
+- обмежує кількість одночасних DB connections.
+
+У моєму проєкті глобальний pool створюється один раз при startup
+і закривається при shutdown.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Готова відповідь:
+Pool зменшує latency та не дозволяє кожному запиту відкривати нове з’єднання.
+У production його розмір треба узгодити з кількістю application workers
+і max_connections PostgreSQL.
+
+
+-------------------------------------------------
+22. Що робить async with pool.acquire()?
+
+async with:
+- асинхронно отримує connection із pool;
+- гарантує повернення connection у pool;
+- поверне connection навіть при exception.
+
+Приклад:
+
+async with pool.acquire() as conn:
+    rows = await conn.fetch(query)
+
+Це async context manager.
+Він безпечніший, ніж вручну викликати acquire() і release().
+
+
+-------------------------------------------------
+23. Навіщо у проєкті Pydantic?
+
+Pydantic використовується для:
+- перевірки API request/response;
+- типізації Intent, ValidationResult, ApprovalDecision;
+- перевірки graph state після виконання;
+- серіалізації через model_dump();
+- десеріалізації через model_validate().
+
+Готова відповідь:
+Pydantic забезпечує runtime validation на межах системи.
+Type hints самі по собі не перевіряють значення під час виконання.
+
+
+-------------------------------------------------
+24. Чим Pydantic BaseModel відрізняється від TypedDict?
+
+TypedDict:
+- описує структуру dict для type checker;
+- не виконує runtime validation;
+- зручний як state schema для LangGraph.
+
+BaseModel:
+- перевіряє та перетворює дані під час виконання;
+- має model_dump() і model_validate();
+- зручний для API та domain-моделей.
+
+У моєму проєкті:
+- SQLAssistantStateDict використовується LangGraph;
+- SQLAssistantState — Pydantic-модель для створення,
+  перевірки та збереження state.
+
+
+-------------------------------------------------
+25. Для чого використовуються type hints?
+
+Приклади:
+
+str | None
+list[dict[str, str]]
+SQLAssistantState | None
+
+Type hints:
+- покращують читабельність;
+- допомагають IDE;
+- дозволяють mypy/pyright знаходити помилки;
+- документують contracts між функціями.
+
+Але Python не перевіряє більшість type hints автоматично в runtime.
+Для runtime validation у проєкті використовується Pydantic.
+
+
+-------------------------------------------------
+26. Чим @staticmethod відрізняється від @classmethod?
+
+@staticmethod:
+- не отримує self або cls;
+- це функція, логічно пов’язана з класом.
+
+У моєму LLMService:
+
+@staticmethod
+def _strip_code_fence(content: str) -> str:
+    ...
+
+Метод не використовує стан об’єкта або класу.
+
+@classmethod:
+- отримує cls;
+- може викликати інші class methods;
+- може створювати об’єкти класу.
+
+У моєму коді:
+
+@classmethod
+def _extract_sql(cls, content: str) -> str:
+    return cls._strip_code_fence(content)
+
+
+-------------------------------------------------
+27. Чому exception handling навколо LLM потрібний?
+
+LLM API може повернути:
+- timeout;
+- rate limit;
+- network error;
+- provider error;
+- невалідний JSON.
+
+У моєму коді exception:
+- логуються;
+- для MVP виконується fallback на MockLLMService.
+
+Production-покращення:
+- timeout і max_retries;
+- retry лише для тимчасових помилок;
+- circuit breaker;
+- без silent mock fallback;
+- контрольована помилка або явно позначений degraded mode.
+
+
+-------------------------------------------------
+28. Чому broad except Exception може бути проблемою?
+
+except Exception перехоплює багато різних помилок:
+- network failure;
+- programming bug;
+- validation error;
+- неправильний тип даних.
+
+Якщо всі помилки обробляються однаково,
+можна приховати дефект коду.
+
+Краще:
+- ловити конкретні provider exceptions;
+- окремо обробляти timeout, rate limit та invalid response;
+- невідомі помилки логувати та не маскувати.
+
+
+-------------------------------------------------
+29. Як працюють parameterized SQL-запити в asyncpg?
+
+У проєкті значення передаються окремо:
+
+await conn.fetchrow(query, session_id, thread_id)
+
+А в SQL використовуються placeholders:
+
+WHERE session_id = $1
+  AND thread_id = $2
+
+Переваги:
+- значення не конкатенуються з SQL;
+- зменшується ризик SQL injection;
+- asyncpg правильно передає типи.
+
+Важливо:
+Назви таблиць, колонок та SQL syntax не можна параметризувати через $1.
+Для generated SQL потрібні AST validation і allowlist.
+
+
+-------------------------------------------------
+30. Що таке race condition?
+
+Race condition виникає, коли результат залежить від порядку
+одночасного виконання кількох requests.
+
+Приклад:
+два approvers одночасно підтверджують один approval.
+
+У моєму SQL уже є захист:
+
+WHERE id = $1::uuid AND status = 'pending'
+
+Тільки перший UPDATE змінить pending на approved.
+Другий не отримає row.
+
+Для повної idempotency execution потрібен також:
+- unique execution key;
+- transaction;
+- SELECT FOR UPDATE або atomic INSERT ... ON CONFLICT.
+
+
+-------------------------------------------------
+31. Як GIL пов’язаний з async?
+
+GIL дозволяє лише одному Python thread одночасно виконувати Python bytecode
+в одному процесі CPython.
+
+Але async I/O не намагається паралельно виконувати Python-код.
+Під час await задача очікує мережу або DB,
+тому event loop виконує іншу задачу.
+
+Висновок:
+- async добре підходить для I/O-bound;
+- threads теж корисні для blocking I/O;
+- multiprocessing потрібен для CPU-bound.
+
+
+-------------------------------------------------
+32. Як тестувати Python-частину цього проєкту?
+
+Unit tests:
+- route_validation;
+- route_risk;
+- route_approval;
+- SQL validator;
+- risk heuristics;
+- prompt sanitization;
+- result formatting.
+
+Integration tests:
+- FastAPI + test PostgreSQL;
+- повний LangGraph flow;
+- approval/resume;
+- timeout;
+- audit completeness.
+
+LLM tests:
+- mock model для deterministic CI;
+- golden dataset для реальної моделі;
+- schema accuracy;
+- destructive SQL block rate;
+- execution accuracy.
+
+
+=================================================
+RAG, ВЕКТОРНІ БАЗИ ТА PGVECTOR
+=================================================
+
+33. Що таке RAG?
+
+RAG — Retrieval-Augmented Generation.
+
+Це підхід, де перед генерацією відповіді система:
+1. отримує питання;
+2. знаходить релевантні документи або chunks;
+3. додає знайдений контекст у prompt;
+4. просить LLM відповісти на основі контексту;
+5. повертає відповідь із citations.
+
+Схема:
+
+question
+→ embedding/search query
+→ retrieval
+→ relevant chunks
+→ prompt with context
+→ LLM answer
+
+RAG не навчає модель заново.
+Він підставляє актуальні зовнішні знання під час inference.
+
+
+-------------------------------------------------
+34. Чи є мій AI SQL Assistant RAG-системою?
+
+Ні, у поточному вигляді це не класичний RAG.
+
+Я передаю невелику фіксовану DB schema безпосередньо у prompt:
+
+schema_context=schema_prompt()
+
+Для десятків або сотень таблиць можна додати schema RAG:
+- створити embeddings описів таблиць і колонок;
+- знайти релевантні таблиці за питанням;
+- передати LLM лише потрібну частину schema.
+
+Готова відповідь:
+Зараз це Text-to-SQL workflow із schema context.
+RAG став би потрібним при великій схемі або при додаванні
+business glossary та документації.
+
+
+-------------------------------------------------
+35. Що таке embedding?
+
+Embedding — числовий вектор,
+який представляє семантичний зміст тексту, документа, зображення тощо.
+
+Наприклад:
+
+"кредитна заявка" → [0.14, -0.52, 0.08, ...]
+
+Семантично схожі тексти повинні мати близькі vectors
+у багатовимірному просторі.
+
+Embedding model і generative LLM — різні компоненти:
+- embedding model перетворює текст у vector;
+- LLM генерує відповідь.
+
+
+-------------------------------------------------
+36. Що таке vector database?
+
+Vector database або vector store зберігає:
+- embeddings;
+- original text або document reference;
+- metadata;
+- індекси для nearest-neighbor search.
+
+Вона знаходить не лише точні keyword matches,
+а семантично схожі об’єкти.
+
+Приклади:
+- PostgreSQL + pgvector;
+- Pinecone;
+- Qdrant;
+- Weaviate;
+- Milvus;
+- Chroma.
+
+PostgreSQL із pgvector зручний,
+коли relational data, metadata, ACL та vectors
+потрібно зберігати в одній базі.
+
+
+-------------------------------------------------
+37. Що таке pgvector?
+
+pgvector — extension для PostgreSQL, яка додає:
+- тип vector;
+- зберігання embeddings;
+- exact nearest-neighbor search;
+- approximate indexes HNSW і IVFFlat;
+- distance operators.
+
+Приклад:
+
+CREATE EXTENSION vector;
+
+CREATE TABLE document_chunks (
+    id UUID PRIMARY KEY,
+    content TEXT NOT NULL,
+    embedding vector(1536),
+    metadata JSONB
+);
+
+Пошук:
+
+SELECT id, content
+FROM document_chunks
+ORDER BY embedding <=> $1
+LIMIT 5;
+
+Оператор <=> означає cosine distance.
+
+
+-------------------------------------------------
+38. Що таке exact та approximate vector search?
+
+Exact search:
+- порівнює query vector з усіма кандидатами;
+- дає точний результат;
+- стає повільним на великих datasets;
+- може виконуватись без ANN index.
+
+Approximate Nearest Neighbor search:
+- перевіряє не всі vectors;
+- набагато швидший;
+- може пропустити частину справжніх nearest neighbors;
+- має trade-off speed vs recall.
+
+У pgvector approximate indexes:
+- HNSW;
+- IVFFlat.
+
+
+-------------------------------------------------
+39. Як обчислюється cosine similarity?
+
+Для двох vectors A і B:
+
+cosine_similarity(A, B) =
+(A · B) / (||A|| * ||B||)
+
+де:
+A · B — dot product;
+||A|| — Euclidean norm vector A;
+||B|| — Euclidean norm vector B.
+
+Приклад:
+
+A = [1, 2]
+B = [2, 1]
+
+Dot product:
+1*2 + 2*1 = 4
+
+Norm A:
+sqrt(1² + 2²) = sqrt(5)
+
+Norm B:
+sqrt(2² + 1²) = sqrt(5)
+
+Cosine similarity:
+4 / (sqrt(5) * sqrt(5)) = 4/5 = 0.8
+
+Інтерпретація:
+1 — однаковий напрямок;
+0 — vectors ортогональні;
+-1 — протилежний напрямок.
+
+Для багатьох текстових embeddings значення часто позитивні,
+але математично діапазон similarity — від -1 до 1.
+
+
+-------------------------------------------------
+40. Як обчислюється cosine distance?
+
+У pgvector:
+
+cosine_distance = 1 - cosine_similarity
+
+Для попереднього прикладу:
+
+similarity = 0.8
+distance = 1 - 0.8 = 0.2
+
+Чим менша distance, тим vectors ближчі.
+
+SQL:
+
+SELECT embedding <=> $1 AS cosine_distance
+FROM document_chunks
+ORDER BY embedding <=> $1
+LIMIT 5;
+
+Cosine similarity у pgvector:
+
+SELECT 1 - (embedding <=> $1) AS cosine_similarity
+FROM document_chunks;
+
+Якщо embeddings normalized до довжини 1,
+cosine similarity дорівнює dot product.
+
+
+-------------------------------------------------
+41. Які distance operators є в pgvector?
+
+Основні:
+
+<->  L2 / Euclidean distance
+<#>  negative inner product
+<=>  cosine distance
+<+>  L1 / Manhattan distance
+
+Для індексу треба вибрати відповідний operator class:
+
+vector_l2_ops
+vector_ip_ops
+vector_cosine_ops
+vector_l1_ops
+
+Приклад cosine index:
+
+CREATE INDEX ON document_chunks
+USING hnsw (embedding vector_cosine_ops);
+
+Запит також повинен використовувати cosine operator <=>,
+щоб planner міг застосувати цей index.
+
+
+-------------------------------------------------
+42. Як працює HNSW?
+
+HNSW — Hierarchical Navigable Small World.
+
+Це багаторівневий graph:
+- кожен vector є node;
+- nodes з’єднані з близькими neighbors;
+- верхні рівні sparse і дають великі переходи;
+- нижні рівні dense і уточнюють пошук.
+
+Пошук:
+1. стартує на верхньому рівні;
+2. переходить до ближчих nodes;
+3. спускається на нижчі рівні;
+4. повертає nearest candidates.
+
+Переваги:
+- високий recall;
+- швидкий search;
+- не потребує training перед створенням.
+
+Недоліки:
+- більше RAM;
+- довше створення index;
+- повільніші inserts.
+
+
+-------------------------------------------------
+43. Основні параметри HNSW
+
+m:
+Максимальна кількість connections для node на рівні.
+Більше m:
+- кращий recall;
+- більший index;
+- довший build та inserts.
+
+ef_construction:
+Розмір candidate list під час побудови index.
+Більше значення:
+- краща якість graph;
+- повільніша побудова.
+
+ef_search:
+Розмір candidate list під час пошуку.
+Більше значення:
+- кращий recall;
+- більша latency.
+
+Приклад:
+
+CREATE INDEX idx_chunks_embedding_hnsw
+ON document_chunks
+USING hnsw (embedding vector_cosine_ops)
+WITH (m = 16, ef_construction = 64);
+
+SET LOCAL hnsw.ef_search = 100;
+
+
+-------------------------------------------------
+44. Як працює IVFFlat?
+
+IVFFlat — Inverted File with Flat storage.
+
+Під час створення:
+- vectors кластеризуються;
+- створюється певна кількість clusters — lists;
+- кожен vector належить до найближчого cluster.
+
+Під час пошуку:
+- визначаються найближчі clusters;
+- перевіряються лише vectors із цих clusters.
+
+Переваги:
+- менше memory, ніж HNSW;
+- швидший build;
+- добре працює на великих stable datasets.
+
+Недоліки:
+- index краще створювати після завантаження достатньої кількості data;
+- quality залежить від lists та probes;
+- при зміні distribution може знадобитися rebuild;
+- зазвичай нижчий recall, ніж добре налаштований HNSW.
+
+
+-------------------------------------------------
+45. Що таке lists і probes в IVFFlat?
+
+lists:
+Кількість clusters в index.
+
+Більше lists:
+- менші clusters;
+- потенційно швидший search;
+- більший build cost;
+- потрібно правильно налаштувати probes.
+
+probes:
+Скільки clusters перевіряється під час одного query.
+
+Більше probes:
+- вищий recall;
+- більша latency.
+
+Приклад:
+
+CREATE INDEX idx_chunks_embedding_ivf
+ON document_chunks
+USING ivfflat (embedding vector_cosine_ops)
+WITH (lists = 100);
+
+SET LOCAL ivfflat.probes = 10;
+
+Якщо probes дорівнює кількості lists,
+пошук наближається до exact search,
+але втрачається перевага ANN.
+
+
+-------------------------------------------------
+46. HNSW чи IVFFlat — що обрати?
+
+HNSW:
+- кращий default для high recall;
+- швидкий query;
+- більше memory;
+- дорожчі build та writes.
+
+IVFFlat:
+- дешевший index;
+- швидший build;
+- підходить для великого відносно stable dataset;
+- потребує tuning lists/probes;
+- бажано створювати після завантаження data.
+
+Готова відповідь:
+Я б починала з HNSW для якісного semantic search,
+а вибір підтверджувала benchmark за recall, latency,
+memory, insert rate та dataset size.
+
+
+-------------------------------------------------
+47. Що таке chunking у RAG?
+
+Chunking — поділ документа на невеликі частини,
+для яких створюються окремі embeddings.
+
+Поганий chunking:
+- занадто великий chunk містить забагато тем;
+- занадто малий втрачає context;
+- розрізання таблиці або абзацу руйнує meaning.
+
+Стратегії:
+- fixed-size chunks;
+- recursive splitting;
+- за headings/sections;
+- semantic chunking;
+- parent-child retrieval.
+
+Треба зберігати metadata:
+document_id, page, section, ACL, version, source.
+
+
+-------------------------------------------------
+48. Що таке hybrid search?
+
+Hybrid search поєднує:
+- semantic vector search;
+- keyword/full-text search.
+
+Vector search добре знаходить змістовну схожість.
+Keyword search добре знаходить:
+- точні назви;
+- коди;
+- номери договорів;
+- рідкісні терміни.
+
+Результати можна об’єднати через:
+- weighted score;
+- Reciprocal Rank Fusion;
+- reranker.
+
+
+-------------------------------------------------
+49. Що таке reranking?
+
+Перший retriever швидко знаходить top-K candidates.
+
+Reranker повторно оцінює невеликий набір pairs:
+
+query + chunk
+
+і змінює порядок результатів.
+
+Pipeline:
+
+retrieve top 30
+→ rerank
+→ take top 5
+→ send to LLM
+
+Reranking підвищує relevance,
+але додає latency та cost.
+
+
+=================================================
+POSTGRESQL INDEXES: ТЕОРІЯ ТА МОЄ ТЕСТОВЕ
+=================================================
+
+50. Що таке індекс у PostgreSQL?
+
+Індекс — додаткова структура даних,
+яка дозволяє швидше знаходити rows,
+не виконуючи повний sequential scan таблиці.
+
+Ціна index:
+- займає disk;
+- споживає cache;
+- уповільнює INSERT/UPDATE/DELETE;
+- потребує maintenance;
+- не гарантує використання planner-ом.
+
+Індекс створюють під реальні query patterns,
+а не на кожну колонку.
+
+
+-------------------------------------------------
+51. Як працює B-tree?
+
+B-tree — balanced multi-way search tree.
+
+Структура:
+- root page;
+- internal pages;
+- leaf pages.
+
+Internal nodes містять key ranges та pointers.
+Leaf pages містять sorted index entries і посилання на table rows.
+
+Пошук:
+1. від root вибирається потрібна гілка;
+2. проходимо internal levels;
+3. знаходимо leaf page;
+4. отримуємо row pointer.
+
+Оскільки tree balanced,
+шлях до leaf має приблизно однакову довжину.
+
+B-tree добре працює для:
+=, <, <=, >, >=, BETWEEN,
+ORDER BY, MIN/MAX та prefix частини composite index.
+
+У PostgreSQL CREATE INDEX без USING за замовчуванням створює B-tree.
+
+
+-------------------------------------------------
+52. Що таке selectivity?
+
+Selectivity показує,
+яку частину таблиці відбирає умова.
+
+Висока selectivity:
+email = 'a@b.com'
+Повертає мало rows — index корисний.
+
+Низька selectivity:
+is_test_account = false
+Повертає більшість таблиці — planner часто вибере Seq Scan.
+
+Тому index на boolean або status не завжди корисний.
+Потрібно перевіряти через EXPLAIN.
+
+
+-------------------------------------------------
+53. Як працює composite B-tree index?
+
+Приклад:
+
+CREATE INDEX idx_messages_session
+ON chat_messages(session_id, created_at);
+
+Порядок колонок важливий.
+
+Index найкраще підходить для:
+WHERE session_id = ?
+ORDER BY created_at
+
+Також може допомогти для:
+WHERE session_id = ?
+
+Але значно гірше або не допоможе для:
+WHERE created_at > ?
+без умови на session_id.
+
+Правило:
+спочатку equality filters,
+потім range або sort column.
+
+
+-------------------------------------------------
+54. Що таке covering index та INCLUDE?
+
+Covering index містить усі дані,
+потрібні query, тому PostgreSQL потенційно може виконати Index Only Scan.
+
+Приклад:
+
+CREATE INDEX idx_audit_session_created
+ON sql_query_audit(session_id, created_at DESC)
+INCLUDE (execution_status, final_sql);
+
+INCLUDE columns:
+- зберігаються в leaf entries;
+- не впливають на порядок index;
+- можуть зменшити heap reads;
+- збільшують розмір index.
+
+Index Only Scan залежить також від visibility map.
+
+
+-------------------------------------------------
+55. Що таке partial index?
+
+Partial index містить лише rows,
+які відповідають WHERE predicate.
+
+Приклад:
+
+CREATE INDEX idx_pending_approvals
+ON sql_approval_queue(created_at)
+WHERE status = 'pending';
+
+Переваги:
+- менший index;
+- швидший для часто запитуваної малої subset;
+- менше write overhead.
+
+Це добре для:
+- pending approvals;
+- active users;
+- unprocessed jobs;
+- rare boolean=true values.
+
+
+-------------------------------------------------
+56. Що таке expression index?
+
+Expression index будується не на raw column,
+а на результаті expression.
+
+Приклад:
+
+CREATE INDEX idx_users_lower_email
+ON users(lower(email));
+
+Допомагає для:
+
+WHERE lower(email) = lower($1)
+
+Але query expression має відповідати index expression.
+
+
+-------------------------------------------------
+57. Які типи index є в PostgreSQL?
+
+B-tree:
+- equality;
+- range;
+- sorting;
+- default type.
+
+Hash:
+- тільки equality;
+- рідше потрібен, B-tree часто достатній.
+
+GIN:
+- inverted index;
+- JSONB;
+- arrays;
+- full-text search;
+- добре для "містить елемент/ключ".
+
+GiST:
+- extensible search tree;
+- geometry;
+- ranges;
+- nearest-neighbor для певних types.
+
+SP-GiST:
+- partitioned search structures;
+- tries;
+- quadtrees;
+- нерівномірні datasets.
+
+BRIN:
+- зберігає summary для block ranges;
+- дуже маленький;
+- добре для великих append-only tables,
+  де column фізично корелює з порядком rows,
+  наприклад created_at.
+
+pgvector HNSW/IVFFlat:
+- спеціальні ANN indexes для vectors.
+
+
+-------------------------------------------------
+58. Які індекси автоматично створюються у моєму schema?
+
+PRIMARY KEY автоматично створює unique B-tree index:
+
+- users(id)
+- loan_applications(id)
+- transactions(id)
+- sql_approval_queue(id)
+- sql_query_audit(id)
+- chat_sessions(id)
+- chat_messages(id)
+
+Composite PRIMARY KEY:
+
+- graph_state_snapshots(session_id, thread_id)
+
+UNIQUE також створює unique B-tree index:
+
+- users(email)
+
+Тому окремі indexes на ці самі поля не потрібні.
+
+
+-------------------------------------------------
+59. Які ручні indexes створені в моєму тестовому?
+
+У schema.sql:
+
+1. idx_users_created_at
+   ON users(created_at)
+
+2. idx_users_acquisition_channel
+   ON users(acquisition_channel)
+
+3. idx_users_is_test
+   ON users(is_test_account)
+
+4. idx_loan_applications_user_id
+   ON loan_applications(user_id)
+
+5. idx_loan_applications_submitted_at
+   ON loan_applications(submitted_at)
+
+6. idx_loan_applications_status
+   ON loan_applications(status)
+
+7. idx_transactions_user_id
+   ON transactions(user_id)
+
+8. idx_transactions_created_at
+   ON transactions(created_at)
+
+9. idx_transactions_merchant_name
+   ON transactions(merchant_name)
+
+10. idx_approval_status
+    ON sql_approval_queue(status)
+
+11. idx_audit_session
+    ON sql_query_audit(session_id)
+
+12. idx_messages_session
+    ON chat_messages(session_id, created_at)
+
+
+-------------------------------------------------
+60. Навіщо idx_users_created_at?
+
+Допомагає для:
+- користувачів за date range;
+- нових користувачів за місяць;
+- сортування за created_at.
+
+Приклад із тестового:
+
+WHERE created_at >= '2025-04-01'
+  AND created_at < '2025-05-01'
+
+Це правильний B-tree index для range queries.
+
+
+-------------------------------------------------
+61. Навіщо idx_users_acquisition_channel?
+
+Допомагає для filtering або grouping за acquisition_channel.
+
+Але для query:
+
+WHERE created_at BETWEEN ...
+GROUP BY acquisition_channel
+
+окремі indexes на created_at і acquisition_channel
+не завжди ідеально працюватимуть разом.
+
+Можливий composite index:
+
+(created_at, acquisition_channel)
+
+або:
+
+(acquisition_channel, created_at)
+
+Порядок залежить від найбільш типових filters.
+Рішення потрібно підтверджувати EXPLAIN ANALYZE.
+
+
+-------------------------------------------------
+62. Чи корисний idx_users_is_test?
+
+Це найсумнівніший index у schema.
+
+Boolean має лише два значення.
+Якщо майже всі users мають is_test_account = false,
+умова:
+
+WHERE is_test_account = false
+
+повертає більшість таблиці,
+тому planner часто вибере Seq Scan.
+
+Кращий варіант, якщо часто шукаємо рідкісні test accounts:
+
+CREATE INDEX idx_test_users_only
+ON users(id)
+WHERE is_test_account = true;
+
+Для виключення test accounts у великих analytics queries
+звичайний boolean index може не дати користі.
+
+
+-------------------------------------------------
+63. Навіщо indexes на foreign keys user_id?
+
+У PostgreSQL foreign key на referencing column
+не створює index автоматично.
+
+Тому:
+
+idx_loan_applications_user_id
+idx_transactions_user_id
+
+є правильними.
+
+Вони допомагають:
+- JOIN ... ON child.user_id = users.id;
+- пошуку всіх loans/transactions користувача;
+- перевіркам при DELETE/UPDATE parent row.
+
+Referenced users(id) уже має PK index.
+
+
+-------------------------------------------------
+64. Навіщо idx_loan_applications_submitted_at?
+
+Допомагає для date range:
+
+WHERE submitted_at >= ...
+  AND submitted_at < ...
+
+Наприклад:
+середній час approval для applications у Q1.
+
+Це хороший index для time filtering.
+
+
+-------------------------------------------------
+65. Чи корисний idx_loan_applications_status?
+
+Status зазвичай має низьку або середню cardinality:
+pending, approved, rejected.
+
+Index може бути корисним,
+якщо один status відбирає малу частину rows.
+
+Якщо distribution рівномірний або query повертає велику частину таблиці,
+Seq Scan може бути дешевшим.
+
+Для частого query типу:
+
+WHERE status = 'pending'
+ORDER BY submitted_at
+
+краще:
+
+CREATE INDEX idx_loans_pending_submitted
+ON loan_applications(submitted_at)
+WHERE status = 'pending';
+
+
+-------------------------------------------------
+66. Навіщо idx_transactions_created_at?
+
+Допомагає для:
+- last quarter;
+- monthly reports;
+- time-range scans;
+- sorting by created_at.
+
+Для великих append-only transactions table
+можна розглянути BRIN(created_at),
+якщо rows фізично добре впорядковані за часом.
+
+B-tree:
+- точніший;
+- більший;
+- кращий для невеликих ranges.
+
+BRIN:
+- дуже компактний;
+- хороший для дуже великих часових таблиць;
+- менш точний, читає block ranges.
+
+
+-------------------------------------------------
+67. Навіщо idx_transactions_merchant_name?
+
+Допомагає для:
+
+WHERE merchant_name = $1
+
+Але query "top merchants by transaction volume last quarter"
+зазвичай:
+- фільтрує created_at;
+- group by merchant_name;
+- sum(amount).
+
+Окремий merchant_name index не гарантує прискорення агрегації.
+
+Можливий composite/covering index:
+
+CREATE INDEX idx_transactions_period_merchant
+ON transactions(created_at, merchant_name)
+INCLUDE (amount, user_id);
+
+Але він може бути великим,
+тому його треба додавати лише після EXPLAIN і workload analysis.
+
+
+-------------------------------------------------
+68. Чи потрібен idx_transactions_user_id?
+
+Так.
+
+Він допомагає для JOIN:
+
+transactions.user_id = users.id
+
+та filters по конкретному user.
+
+Це важливо для query,
+де transactions join users,
+щоб виключити internal test accounts.
+
+
+-------------------------------------------------
+69. Чи достатній idx_approval_status?
+
+Поточний query:
+
+WHERE status = $1
+ORDER BY created_at ASC
+
+І timeout query:
+
+WHERE status = 'pending'
+  AND created_at < ...
+
+Поточний index лише на status допомагає знайти pending rows,
+але PostgreSQL ще може сортувати за created_at.
+
+Краще:
+
+CREATE INDEX idx_approval_status_created
+ON sql_approval_queue(status, created_at);
+
+Або partial index:
+
+CREATE INDEX idx_pending_approval_created
+ON sql_approval_queue(created_at)
+WHERE status = 'pending';
+
+Для approval queue partial index часто кращий,
+бо важливі саме pending rows.
+
+
+-------------------------------------------------
+70. Чи достатній idx_audit_session?
+
+Поточні queries:
+
+WHERE session_id = $1
+ORDER BY created_at DESC
+LIMIT ...
+
+Index лише на session_id фільтрує session,
+але не повністю підтримує sorting.
+
+Краще:
+
+CREATE INDEX idx_audit_session_created
+ON sql_query_audit(session_id, created_at DESC);
+
+Також у коді є:
+
+WHERE approval_request_id = $1
+ORDER BY created_at DESC
+LIMIT 1
+
+Для цього зараз немає окремого index.
+
+Можна додати:
+
+CREATE INDEX idx_audit_approval_created
+ON sql_query_audit(approval_request_id, created_at DESC)
+WHERE approval_request_id IS NOT NULL;
+
+
+-------------------------------------------------
+71. Чому idx_messages_session хороший?
+
+Поточний index:
+
+ON chat_messages(session_id, created_at)
+
+Queries:
+
+WHERE session_id = $1
+ORDER BY created_at ASC
+
+і:
+
+WHERE session_id = $1
+ORDER BY created_at DESC
+LIMIT $2
+
+B-tree можна сканувати вперед або назад,
+тому index добре підтримує обидва order directions.
+
+Це вдалий composite index:
+equality column session_id стоїть першою,
+sort/range column created_at — другою.
+
+
+-------------------------------------------------
+72. Якого index може бракувати для resolve pending message?
+
+Query додатково використовує:
+
+session_id
+thread_id
+role = 'assistant'
+response_json->>'approval_request_id'
+ORDER BY created_at DESC
+
+Поточний idx_messages_session допомагає частково.
+
+Для великого обсягу можна розглянути expression/partial index:
+
+CREATE INDEX idx_pending_assistant_approval_message
+ON chat_messages(
+    session_id,
+    thread_id,
+    (response_json->>'approval_request_id'),
+    created_at DESC
+)
+WHERE role = 'assistant';
+
+Але для internal tool приблизно на 20 users
+цей index може бути передчасною оптимізацією.
+
+
+-------------------------------------------------
+73. Як перевірити, чи index реально використовується?
+
+Використати:
+
+EXPLAIN
+SELECT ...
+
+Показує estimated plan без виконання.
+
+EXPLAIN ANALYZE
+SELECT ...
+
+Фактично виконує query та показує actual timings і rows.
+
+Дивитися на:
+- Seq Scan;
+- Index Scan;
+- Index Only Scan;
+- Bitmap Index Scan;
+- estimated rows vs actual rows;
+- sort;
+- buffers;
+- total execution time.
+
+Не можна оцінювати index лише за його наявністю.
+Рішення приймає PostgreSQL planner на основі statistics і cost.
+
+
+-------------------------------------------------
+74. Чому PostgreSQL іноді не використовує index?
+
+Причини:
+- query повертає значну частину таблиці;
+- таблиця дуже мала;
+- низька selectivity;
+- outdated statistics;
+- function/cast не відповідає index expression;
+- leading column composite index відсутня у filter;
+- planner вважає Seq Scan дешевшим;
+- неправильний operator class;
+- LIKE починається з wildcard;
+- data type mismatch.
+
+
+-------------------------------------------------
+75. Які indexes я б змінила в тестовому перед production?
+
+1. Замінити:
+
+idx_approval_status(status)
+
+на:
+
+(status, created_at)
+
+або partial:
+
+(created_at) WHERE status = 'pending'
+
+
+2. Замінити або доповнити:
+
+idx_audit_session(session_id)
+
+на:
+
+(session_id, created_at DESC)
+
+
+3. Додати:
+
+(approval_request_id, created_at DESC)
+WHERE approval_request_id IS NOT NULL
+
+
+4. Переглянути:
+
+idx_users_is_test(is_test_account)
+
+через низьку selectivity.
+Можливо замінити partial index для true.
+
+
+5. Переглянути status indexes
+через реальну distribution.
+
+
+6. Залишити:
+
+loan_applications(user_id)
+transactions(user_id)
+
+бо PostgreSQL не створює indexes
+на referencing foreign key columns автоматично.
+
+
+7. Підтвердити всі зміни через:
+EXPLAIN (ANALYZE, BUFFERS)
+на реальному обсязі даних.
+
+--------------------------------------------
+ACID
+Atomicity — транзакція виконується повністю або не виконується.
+Consistency — дані залишаються валідними згідно з constraints.
+Isolation — паралельні транзакції не повинні некоректно впливати одна на одну.
+Durability — після commit дані не втрачаються після збою.
+
+WHERE проти HAVING
+WHERE фільтрує рядки до агрегації.
+HAVING фільтрує групи після GROUP BY.
+
+EXPLAIN та EXPLAIN ANALYZE
+- Показує оцінений план без виконання.
+- Реально виконує запит і показує фактичний час та кількість рядків.
+
+SQL injection
+Parameterized query
+
+Authentication проти authorization
+Authentication: хто ти?
+Authorization: що тобі дозволено?
+JWT може підтвердити identity, але endpoint додатково має перевірити роль approver.
+
+Замість того, щоб сервер зберігав інформацію про сесію кожного користувача,
+він видає зашифрований "цифровий паспорт" (токен), який зберігається у клієнта.
+JWT складається з:
+header.payload.signature
+Backend повинен перевіряти: signature; expiration; issuer; audience.
+Payload JWT не зашифрований, а лише закодований. Туди не варто класти секретні дані.
+
+Клоужер (замикання, closure) у Python — це внутрішня функція,
+яка отримує доступ до змінних зовнішньої функції, навіть після того,
+як зовнішня функція завершила свою роботу. Це дозволяє "запам'ятовувати"
+та зберігати певний стан без використання глобальних змінних.
+
+--------------------------------------------
+FastAPI — це легкий сучасний фреймворк, орієнтований на створення API, асинхронну роботу та автоматичну валідацію через Pydantic.
+Django — більш комплексний framework, який має власну ORM, міграції,
+authentication, admin panel і template engine. FastAPI я б обрав для мікросервісів,
+AI/LLM та високонавантажених API, а Django — для монолітного бізнес-застосунку,
+де потрібна велика кількість готових компонентів.
+=================================================
+КОРОТКА ВІДПОВІДЬ ПРО ІНДЕКСИ НА СПІВБЕСІДІ
+=================================================
+
+У моєму тестовому всі явно створені indexes є B-tree,
+тому що CREATE INDEX без USING у PostgreSQL використовує B-tree за замовчуванням.
+
+Вони покривають:
+- date filters: created_at, submitted_at;
+- joins по foreign keys: user_id;
+- filters за status та merchant;
+- session history;
+- approval queue.
+
+Найкраще реалізований composite index:
+chat_messages(session_id, created_at),
+тому що він відповідає query pattern:
+WHERE session_id = ? ORDER BY created_at.
+
+Перед production я б:
+- зробила approval index composite або partial;
+- додала created_at до audit session index;
+- додала index на approval_request_id;
+- переглянула boolean/status indexes через низьку selectivity;
+- перевірила все через EXPLAIN ANALYZE, а не додавала indexes лише теоретично.
+
+
+=================================================
+КОРОТКА ВІДПОВІДЬ ПРО RAG НА СПІВБЕСІДІ
+=================================================
+
+RAG — це pipeline, де система спочатку знаходить релевантні chunks
+у зовнішньому knowledge base, а потім передає їх LLM як context.
+
+Vector database зберігає embeddings та шукає nearest vectors.
+Cosine similarity вимірює кутову схожість:
+
+dot(A, B) / (norm(A) * norm(B))
+
+У pgvector cosine distance дорівнює:
+
+1 - cosine similarity
+
+Для approximate search pgvector підтримує:
+- HNSW — graph-based, високий recall, більше memory;
+- IVFFlat — cluster-based, менше memory,
+  але потребує tuning lists і probes.
+=================================================
+approval_id доданий, щоб ізолювати checkpoints окремих запусків resume-графа та не допустити collision між кількома pending approvals одного thread.
+Але в native LangGraph resume я не створювала б новий thread ID — я б продовжувала оригінальний thread через Command(resume=...).
+=================================================
+
+Для MVP я використала MemorySaver, оскільки він простіший в інтеграції,
+а durable recovery approval flow реалізувала через власні PostgreSQL snapshots, approval queue та audit log.
+Це дозволяє відновитися після рестарту саме на межі human approval,
+але не дає повноцінного LangGraph fault tolerance для будь-якого вузла.
+Я розумію, що це дублювання persistence logic. Для production я б замінила обидва механізми одним AsyncPostgresSaver,
+який зберігав би native LangGraph checkpoints у PostgreSQL.
+
+Так, я розглядала interrupt() і Command(resume=...).
+Поточна реалізація з двома графами була спрощенням:
+approval queue у PostgreSQL стала source of truth, а resume запускається з реконструйованого state.
+Це працює, але є менш idiomatic для LangGraph.
+З durable AsyncPostgresSaver я б залишила один compiled graph,
+зупиняла його через interrupt() і відновлювала через Command(resume=...) з тим самим thread ID.
+
+Fallback знадобився через те, що custom snapshot keyed лише за session і thread та представляє останній стан цього thread.
+Якщо в одному thread є кілька pending high-risk запитів, останній snapshot може належати іншому approval.
+Тому перед resume я перевіряю approval ID, а при mismatch реконструюю state з конкретного approval row та audit record.
+Інакше можна було б продовжити не той запит.
+=================================================
+
+*****************************************************************************
+Я використала MemorySaver разом із власними PostgreSQL snapshots як MVP-компроміс.
+Це дозволило відновлювати approval flow після restart,
+але це не повноцінна native LangGraph persistence і створює дублювання.
+Два compiled graphs також були способом вручну відновлювати workflow з approval row,
+але стандартнішим рішенням був би один graph з interrupt() і Command(resume=...) та AsyncPostgresSaver.
+Функція _rebuild_state_from_approval_row потрібна через те, що один snapshot на session/thread може вже належати іншому pending approval.
+Щодо retry limits — вони відповідають ТЗ:
+<3 дає дві повторні validation-спроби,
+а <2 — одну повторну execution-спробу.
+Реальне відхилення є для MEDIUM: зараз він виконується відразу, а warning показується після виконання.
+Я б додала окремий requester acknowledgment через interrupt перед execute.
+*****************************************************************************
+
+=================================================
+Regex був додатковою швидкою перевіркою, але він не повинен бути основним механізмом безпеки.
+Він може давати false positives на рядках, коментарях та ідентифікаторах і false negatives на вкладених або діалектних конструкціях.
+Надійніше перевіряти типи вузлів AST та додатково обмежувати права користувача на рівні бази даних.
+=================================================
+Поточна реалізація перевіряє існування колонки, але не виконує повноцінне column resolution.
+При JOIN вона може пропустити неоднозначну колонку. Для некваліфікованої колонки потрібно знайти всі можливі джерела: нуль означає unknown column, одне — валідну колонку, більше одного — ambiguous column.
+Для кваліфікованих колонок потрібно спочатку розв’язувати alias.
+=================================================
+Wrapper був обраний, щоб централізовано встановити hard row limit і отримати один додатковий рядок для визначення truncation, не змінюючи вручну різні форми SELECT.
+Наявний внутрішній LIMIT продовжує діяти, а зовнішній лише додатково обмежує результат.
+Але є нюанс із гарантією ORDER BY, оскільки зовнішній SELECT не має власного сортування.
+FOR UPDATE та інші locking clauses взагалі повинні бути відхилені AST-валідацією.
+Для production я б поєднала AST-перевірку, read-only роль БД, read-only transaction, statement timeout і контроль кількості рядків.
+=================================================
+Поточний limiter коректний лише для одного процесу.
+При кількох workers або replicas кожен має власний bucket, тому ефективний limit множиться, а після restart скидається.
+Для production я б перенесла стан у Redis і використовувала atomic sliding window або token bucket, прив’язаний до authenticated user.
+Sticky sessions не вирішують проблему надійно.
+=================================================
+Липкі сесії (sticky sessions або session affinity) — це метод балансування навантаження, за якого всі запити від одного
+користувача направляються на той самий сервер протягом усієї його взаємодії з вебдодатком.
+Вони використовуються для збереження стану користувача, якщо ці дані зберігаються локально на самому сервері.
+=================================================
+X-User-Role у тестовому — це mock RBAC, а не production authentication.
+Будь-хто може підробити header.
+У production я б використала корпоративний OIDC/SSO, перевіряла signed access token у backend,
+а роль отримувала з server-side mapping груп або claims. Кожен approval endpoint додатково перевіряв би роль approver.
+=================================================
+Якщо status спочатку читається,
+а потім оновлюється окремим запитом без lock або умови WHERE status = PENDING_REVIEW,
+race існує. Два approvers можуть одночасно пройти перевірку, а останній update перезапише перший.
+Я б зробила atomic state transition через UPDATE ... WHERE status = 'PENDING_REVIEW' RETURNING.
+Якщо рядок не повернувся — 409 Conflict.
+Додатково execution повинен мати unique idempotency key по approval_id, щоб graph або SQL не запустилися двічі.
+=================================================
+Raw results зберігаються для відображення користувачу, але не передаються у наступний LLM-контекст.
+Перед кожним новим запуском recent_context() будує allowlist-проєкцію assistant response і залишає тільки message, SQL, risk level та assumptions.
+Поля rows і columns відкидаються. Це ізоляція на рівні context assembly.
+Для production я б посилила її окремою типізованою моделлю conversational memory, окремим storage та regression-тестом із sensitive sentinel value
+=================================================
+sanitize_user_text — це санітизація і контроль розміру, а не повний захист від prompt injection.
+Вона прибирає code fences і null bytes, але пропустить звичайний текст ignore previous instructions.
+Основний safety boundary розташований після LLM: schema validation, AST-перевірка, risk assessment, approval і read-only DB permissions.
+Для production я б додатково розділила system та user messages, ввела semantic policy checks і тестовий набір prompt-injection сценаріїв.
+=================================================
+Мовчазний fallback був зручним рішенням для demo та локальної розробки, щоб застосунок працював без API key.
+Але в production це не повинно бути непомітним, бо mock може повернути технічно валідний, але семантично неправильний SQL.
+Я б зробила production-режим fail-closed, а якщо fallback дозволений — явно повертала degraded=true, показувала warning користувачу та збирала окремі метрики.
+=================================================
+Поточний deterministic mock перевіряє happy path, але не вміє навмисно повернути invalid SQL чи exception,
+тому сам по собі retry-loop повністю не тестує.
+Для retry-тестів я б використовувала scripted test double або AsyncMock.side_effect:
+перший виклик повертає SQL з неіснуючою таблицею, другий — правильний SQL.
+Далі перевіряю кількість викликів, retry count, передачу previous error і те, що execution відбувся лише після успішної валідації.
+=================================================
+

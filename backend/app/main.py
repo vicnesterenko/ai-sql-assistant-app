@@ -12,18 +12,22 @@ from app.core.logger_setup import configure_logging, log_event
 from app.core.settings import settings
 from app.db.pool import close_pool, init_pool
 from app.db.init_db import init_schema
+from app.graph.workflow import close_workflow, init_workflow
 
-configure_logging()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configure_logging()
     await init_pool()
     await init_schema()
+    await init_workflow()
+
     log_event("app.startup.complete")
 
     try:
         yield
     finally:
+        await close_workflow()
         await close_pool()
         log_event("app.shutdown.complete")
 

@@ -1,0 +1,19 @@
+docker compose down
+docker compose up --build -d
+docker compose config --services
+docker compose down -v ( видалить усі імеджі )
+
+docker compose exec postgres psql -U postgres -d ai_sql_assistant
+docker compose config --services
+
+psql -d postgres
+\dt - tables
+\q - quite
+
+pip install -U \
+    langgraph \
+    langgraph-checkpoint-postgres \
+    "psycopg[binary,pool]"
+
+poetry run python -c \
+"from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver; print('OK')"

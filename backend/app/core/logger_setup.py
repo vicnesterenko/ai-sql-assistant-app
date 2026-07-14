@@ -36,6 +36,7 @@ def log_event(message: str, **payload: Any) -> None:
     logger.info(message, extra={"extra_payload": payload})
 
 
+# observability - який вузол скільки виконувався, чи помилка при завершенні
 @contextmanager
 def log_node(session_id: str, thread_id: str, node_name: str) -> Iterator[None]:
     started = time.perf_counter()

@@ -1,45 +1,14 @@
-"""
-LangGraph workflow definition for the AI SQL Assistant.
+"""LangGraph workflow with PostgreSQL checkpoint persistence."""
 
-This module defines two graph entry points:
+from contextlib import AsyncExitStack
+from typing import Any
+from uuid import uuid4
 
-1. `compiled_graph`
-   Used for a normal user chat message. It starts from `parse_intent` and runs
-   the full flow:
-
-       parse_intent
-       -> generate_sql
-       -> validate_sql
-       -> assess_risk
-       -> execute_query / request_approval
-       -> format_result
-
-   If the query is LOW or MEDIUM risk, it is executed immediately (MEDIUM emits
-   a warning to the user first). If the query is HIGH risk, it is saved to the
-   approval queue and the graph stops at `await_approval`.
-
-2. `compiled_resume_graph`
-   Used after an approver approves or rejects a pending HIGH-risk query. It does
-   not start from `parse_intent`, because the intent, generated SQL, validation,
-   and risk assessment were already completed before approval.
-
-   Instead, it resumes from `await_approval`:
-
-       await_approval
-       -> execute_query / format_result
-       -> format_result
-
-   If the approval was accepted, the approved SQL is executed. If it was
-   rejected, the graph formats a rejection response.
-
-The persisted graph state is loaded by `resume_after_approval()`. If several
-approval requests exist in the same session/thread, the state can be rebuilt
-from the specific approval row to avoid resuming the wrong query.
-"""
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, StateGraph
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Command
 
-from app.graph.state import SQLAssistantStateDict
+from app.core.settings import settings
 from app.graph.nodes import (
     assess_risk_node,
     await_approval_node,
@@ -51,193 +20,258 @@ from app.graph.nodes import (
     request_approval_node,
     validate_sql_node,
 )
-from app.graph.utils import obj_value
-from app.models.types import ApprovalDecision, ApprovalStatus, Intent, RiskLevel, SQLAssistantState
+from app.graph.state import SQLAssistantState
+from app.models.types import ApprovalStatus
 from app.services.approval_service import decision_from_row, get_approval
-from app.services.audit_service import get_audit_by_approval_request
 from app.services.session_service import recent_context
-from app.services.state_store import load_state, save_state
 
 
+_compiled_graph: Any | None = None
+_workflow_resources: AsyncExitStack | None = None
 
-def route_validation(state: SQLAssistantStateDict) -> str:
-    validation = state.get("validation_result")
-    if validation and obj_value(validation, "is_valid"):
+
+def route_validation(state: SQLAssistantState) -> str:
+    """Routes valid SQL forward and invalid SQL through correction retries."""
+
+    if (
+        state.validation_result
+        and state.validation_result.is_valid
+    ):
         return "valid"
-    if state.get("retry_count", 0) < 3:
+
+    if state.retry_count < 3:
         return "retry"
+
     return "error"
 
 
-def route_risk(state: SQLAssistantStateDict) -> str:
-    risk = state.get("risk_level")
-    risk_value = risk.value if hasattr(risk, "value") else risk
-    if risk_value == "HIGH":
+def route_risk(state: SQLAssistantState) -> str:
+    """Routes HIGH-risk SQL to approval and other SQL to execution."""
+
+    if state.risk_level and state.risk_level.value == "HIGH":
         return "high"
+
     return "execute"
 
 
-def route_approval(state: SQLAssistantStateDict) -> str:
-    decision = state.get("approval_decision")
-    if not decision:
-        return "wait"
-    status = obj_value(decision, "status")
-    status_value = status.value if hasattr(status, "value") else status
-    if status_value == ApprovalStatus.APPROVED.value:
+def route_approval(state: SQLAssistantState) -> str:
+    """Routes a resumed approval decision to execution or rejection output."""
+
+    if (
+        state.approval_decision
+        and state.approval_decision.status
+        == ApprovalStatus.APPROVED
+    ):
         return "approved"
+
     return "rejected"
 
 
-def route_execution(state: SQLAssistantStateDict) -> str:
-    result = state.get("execution_result")
-    if result and obj_value(result, "status") == "ok":
+def route_execution(state: SQLAssistantState) -> str:
+    """Routes successful execution to formatting and failed execution to retry."""
+
+    if (
+        state.execution_result
+        and state.execution_result.status == "ok"
+    ):
         return "ok"
-    if state.get("execution_retry_count", 0) < 2:
+
+    if state.execution_retry_count < 2:
         return "retry"
+
     return "done"
 
-# Main graph for a new user message.
-# This graph always starts from natural-language intent parsing.
-builder = StateGraph(SQLAssistantStateDict)
 
-builder.add_node("parse_intent", parse_intent_node)
-builder.add_node("generate_sql", generate_sql_node)
-builder.add_node("validate_sql", validate_sql_node)
-builder.add_node("assess_risk", assess_risk_node)
-builder.add_node("request_approval", request_approval_node)
-builder.add_node("await_approval", await_approval_node)
-builder.add_node("execute_query", execute_query_node)
-builder.add_node("format_result", format_result_node)
-builder.add_node("handle_error", handle_error_node)
+def build_graph(checkpointer: AsyncPostgresSaver) -> Any:
+    """Builds one graph for both initial execution and approval resume."""
 
-builder.set_entry_point("parse_intent")
-builder.add_edge("parse_intent", "generate_sql")
-builder.add_edge("generate_sql", "validate_sql")
-builder.add_conditional_edges(
-    "validate_sql", route_validation, {"valid": "assess_risk", "retry": "generate_sql", "error": "handle_error"}
-)
-builder.add_conditional_edges("assess_risk", route_risk, {"execute": "execute_query", "high": "request_approval"})
-builder.add_edge("request_approval", "await_approval")
-builder.add_conditional_edges(
-    "await_approval", route_approval, {"wait": END, "approved": "execute_query", "rejected": "format_result"}
-)
-builder.add_conditional_edges(
-    "execute_query", route_execution, {"ok": "format_result", "retry": "generate_sql", "done": "format_result"}
-)
-builder.add_edge("format_result", END)
-builder.add_edge("handle_error", END)
+    builder = StateGraph(SQLAssistantState)
 
-compiled_graph = builder.compile(checkpointer=MemorySaver())
+    builder.add_node("parse_intent", parse_intent_node)
+    builder.add_node("generate_sql", generate_sql_node)
+    builder.add_node("validate_sql", validate_sql_node)
+    builder.add_node("assess_risk", assess_risk_node)
+    builder.add_node("request_approval", request_approval_node)
+    builder.add_node("await_approval", await_approval_node)
+    builder.add_node("execute_query", execute_query_node)
+    builder.add_node("format_result", format_result_node)
+    builder.add_node("handle_error", handle_error_node)
 
-# Resume graph for human-in-the-loop approval.
-# This graph starts from `await_approval`, because SQL generation and risk
-# assessment already happened before the query was sent to the approval queue.
-resume_builder = StateGraph(SQLAssistantStateDict)
+    builder.set_entry_point("parse_intent")
+    builder.add_edge("parse_intent", "generate_sql")
+    builder.add_edge("generate_sql", "validate_sql")
 
-resume_builder.add_node("await_approval", await_approval_node)
-resume_builder.add_node("execute_query", execute_query_node)
-resume_builder.add_node("generate_sql", generate_sql_node)
-resume_builder.add_node("validate_sql", validate_sql_node)
-resume_builder.add_node("assess_risk", assess_risk_node)
-resume_builder.add_node("request_approval", request_approval_node)
-resume_builder.add_node("format_result", format_result_node)
-resume_builder.add_node("handle_error", handle_error_node)
-resume_builder.set_entry_point("await_approval")
-resume_builder.add_conditional_edges(
-    "await_approval", route_approval, {"wait": END, "approved": "execute_query", "rejected": "format_result"}
-)
-resume_builder.add_conditional_edges(
-    "execute_query", route_execution, {"ok": "format_result", "retry": "generate_sql", "done": "format_result"}
-)
-resume_builder.add_edge("generate_sql", "validate_sql")
-resume_builder.add_conditional_edges(
-    "validate_sql", route_validation, {"valid": "assess_risk", "retry": "generate_sql", "error": "handle_error"}
-)
-resume_builder.add_conditional_edges(
-    "assess_risk", route_risk, {"execute": "execute_query", "high": "request_approval"}
-)
-resume_builder.add_edge("request_approval", "await_approval")
-resume_builder.add_edge("format_result", END)
-resume_builder.add_edge("handle_error", END)
+    builder.add_conditional_edges(
+        "validate_sql",
+        route_validation,
+        {
+            "valid": "assess_risk",
+            "retry": "generate_sql",
+            "error": "handle_error",
+        },
+    )
+    builder.add_conditional_edges(
+        "assess_risk",
+        route_risk,
+        {
+            "execute": "execute_query",
+            "high": "request_approval",
+        },
+    )
 
-compiled_resume_graph = resume_builder.compile(checkpointer=MemorySaver())
+    builder.add_edge("request_approval", "await_approval")
+    builder.add_conditional_edges(
+        "await_approval",
+        route_approval,
+        {
+            "approved": "execute_query",
+            "rejected": "format_result",
+        },
+    )
+
+    builder.add_conditional_edges(
+        "execute_query",
+        route_execution,
+        {
+            "ok": "format_result",
+            "retry": "generate_sql",
+            "done": "format_result",
+        },
+    )
+    builder.add_edge("format_result", END)
+    builder.add_edge("handle_error", END)
+
+    return builder.compile(checkpointer=checkpointer)
 
 
-async def run_message_graph(session_id: str, thread_id: str, requester_email: str, message: str) -> SQLAssistantState:
+async def init_workflow() -> None:
+    """Opens AsyncPostgresSaver and compiles the graph during startup."""
+
+    global _compiled_graph, _workflow_resources
+
+    if _compiled_graph is not None:
+        return
+
+    resources = AsyncExitStack()
+
+    try:
+        checkpointer = await resources.enter_async_context(
+            AsyncPostgresSaver.from_conn_string(
+                settings.database_url
+            )
+        )
+
+        # setup() creates or migrates LangGraph checkpoint tables.
+        await checkpointer.setup()
+
+        _compiled_graph = build_graph(checkpointer)
+        _workflow_resources = resources
+    except Exception:
+        await resources.aclose()
+        raise
+
+
+async def close_workflow() -> None:
+    """Closes the PostgreSQL checkpointer during application shutdown."""
+
+    global _compiled_graph, _workflow_resources
+
+    _compiled_graph = None
+
+    if _workflow_resources is not None:
+        await _workflow_resources.aclose()
+        _workflow_resources = None
+
+
+def get_compiled_graph() -> Any:
+    """Returns the initialized graph or fails fast before startup completes."""
+
+    if _compiled_graph is None:
+        raise RuntimeError(
+            "LangGraph workflow is not initialized"
+        )
+
+    return _compiled_graph
+
+
+def _graph_config(checkpoint_thread_id: str) -> dict[str, Any]:
+    """Builds LangGraph configuration for one persistent execution thread."""
+
+    return {
+        "configurable": {
+            "thread_id": checkpoint_thread_id,
+        }
+    }
+
+
+async def run_message_graph(
+    session_id: str,
+    thread_id: str,
+    requester_email: str,
+    message: str,
+) -> SQLAssistantState:
+    """Starts a new graph execution for one user message."""
+
+    graph = get_compiled_graph()
     history = await recent_context(session_id)
-    state = SQLAssistantState(
+
+    checkpoint_thread_id = (
+        f"{session_id}:{thread_id}:{uuid4()}"
+    )
+
+    initial_state = SQLAssistantState(
         session_id=session_id,
-        thread_id=thread_id,
+        thread_id=checkpoint_thread_id,
         requester_email=requester_email,
         messages=history,
         current_question=message,
     )
-    result = await compiled_graph.ainvoke(
-        state.model_dump(),
-        config={"configurable": {"thread_id": f"{session_id}:{thread_id}"}},
-    )
-    final_state = SQLAssistantState.model_validate(result)
-    await save_state(final_state)
-    return final_state
 
-
-async def _rebuild_state_from_approval_row(approval: dict, decision: ApprovalDecision) -> SQLAssistantState:
-    """Rebuild enough graph state to resume a specific approval request.
-
-    The normal path loads the persisted graph state from graph_state_snapshots.
-    However, users may create several HIGH-risk requests in the same session/thread
-    before an approver acts. A single session/thread snapshot can then point to the
-    latest pending request, not necessarily the one the approver clicked.
-
-    This fallback reconstructs the state from sql_approval_queue + sql_query_audit
-    and keeps approval resumption deterministic per approval_id.
-    """
-    audit = await get_audit_by_approval_request(approval["id"])
-    try:
-        risk_level = RiskLevel(approval.get("risk_level") or RiskLevel.HIGH.value)
-    except ValueError:
-        risk_level = RiskLevel.HIGH
-
-    return SQLAssistantState(
-        session_id=approval["session_id"],
-        thread_id=approval["thread_id"],
-        requester_email=approval["requester_email"],
-        messages=[],
-        current_question=approval["original_question"],
-        intent=Intent(question=approval["original_question"], is_follow_up=False, assumptions=[]),
-        generated_sql=approval["generated_sql"],
-        risk_level=risk_level,
-        risk_justification=approval.get("risk_justification"),
-        approval_request_id=approval["id"],
-        approval_decision=decision,
-        audit_id=audit["id"] if audit else None,
+    result = await graph.ainvoke(
+        initial_state,
+        config=_graph_config(checkpoint_thread_id),
     )
 
+    return SQLAssistantState.model_validate(result)
 
-async def resume_after_approval(approval_id: str) -> SQLAssistantState | None:
+
+async def resume_after_approval(
+    approval_id: str,
+) -> SQLAssistantState | None:
+    """Resumes the exact interrupted checkpoint for an approval request."""
+
     approval = await get_approval(approval_id)
+
     if not approval:
         return None
 
-    decision: ApprovalDecision = decision_from_row(approval)
-    state = await load_state(approval["session_id"], approval["thread_id"])
+    graph = get_compiled_graph()
+    checkpoint_thread_id = approval["thread_id"]
+    config = _graph_config(checkpoint_thread_id)
 
-    if not state or state.approval_request_id != approval_id:
-        state = await _rebuild_state_from_approval_row(approval, decision)
+    snapshot = await graph.aget_state(config)
 
-    updated = state.model_copy(
-        update={
-            "approval_decision": decision,
-            "final_response": None,
-            "execution_result": None,
-            "approved_sql": None,
-            "error": None,
-        }
+    if not snapshot.values:
+        raise RuntimeError(
+            "Checkpoint was not found for the approval request"
+        )
+
+    checkpoint_state = SQLAssistantState.model_validate(
+        snapshot.values
     )
-    result = await compiled_resume_graph.ainvoke(
-        updated.model_dump(),
-        config={"configurable": {"thread_id": f"{updated.session_id}:{updated.thread_id}:{approval_id}"}},
+
+    if checkpoint_state.approval_request_id != approval_id:
+        raise RuntimeError(
+            "Approval request does not match the saved checkpoint"
+        )
+
+    decision = decision_from_row(approval)
+
+    result = await graph.ainvoke(
+        Command(
+            resume=decision.model_dump(mode="json")
+        ),
+        config=config,
     )
-    final_state = SQLAssistantState.model_validate(result)
-    await save_state(final_state)
-    return final_state
+
+    return SQLAssistantState.model_validate(result)

@@ -1,5 +1,5 @@
 from app.graph.workflow import resume_after_approval
-from app.models.types import SQLAssistantState
+from app.graph.state import SQLAssistantState
 from app.services import approval_service
 from app.services.session_service import resolve_pending_approval_message
 
@@ -44,11 +44,7 @@ async def approve_and_resume(
     return item, final_state
 
 
-async def reject_and_resume(
-    approval_id: str,
-    approver_email: str,
-    reason: str,
-) -> tuple[dict | None, SQLAssistantState | None]:
+async def reject_and_resume(approval_id: str, approver_email: str, reason: str) -> tuple[dict | None, SQLAssistantState | None]:
     item = await approval_service.reject(approval_id, approver_email, reason)
     if not item:
         return None, None

@@ -1,7 +1,7 @@
 import json
 
 from app.db.pool import get_pool
-from app.models.types import SQLAssistantState
+from app.graph.state import SQLAssistantState
 from app.resources.sql_query import GET_GRAPH_STATE_SQL, UPSERT_GRAPH_STATE_SQL
 
 
@@ -18,10 +18,7 @@ async def save_state(state: SQLAssistantState) -> None:
         )
 
 
-async def load_state(
-    session_id: str,
-    thread_id: str,
-) -> SQLAssistantState | None:
+async def load_state(session_id: str, thread_id: str) -> SQLAssistantState | None:
     pool = get_pool()
 
     async with pool.acquire() as conn:
