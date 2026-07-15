@@ -19,3 +19,7 @@ pip install -U \
 
 poetry run python -c \
 "from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver; print('OK')"
+
+cd frontend
+npm install
+npm run dev

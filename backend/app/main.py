@@ -48,6 +48,3 @@ app.include_router(router=approvals.router, tags=["approvals"])
 app.include_router(router=history.router, tags=["history"])
 app.include_router(router=schema.router, tags=["schema"])
 
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -13,6 +13,31 @@ from app.graph.utils import detect_mutation_keyword
 
 
 def state_model(state: SQLAssistantStateDict) -> SQLAssistantState:
+    """Validate a raw LangGraph state and expose it as a Pydantic model.
+
+    LangGraph passes the shared state to nodes as ``SQLAssistantStateDict``.
+    A ``TypedDict`` is useful for the graph because every node may return only
+    the fields it changed, but it does not perform runtime validation.
+
+    Converting the dictionary with ``model_validate`` creates a validated
+    snapshot for the current node. Pydantic checks field types, applies model
+    defaults, constructs nested models, and allows attribute access such as
+    ``model.session_id`` instead of repeated dictionary lookups.
+
+    The returned model is used only inside the node. The node still returns a
+    partial ``SQLAssistantStateDict`` so LangGraph can merge those updates into
+    the shared graph state.
+
+    Args:
+        state: Current dictionary state supplied by LangGraph.
+
+    Returns:
+        A validated ``SQLAssistantState`` representation of the current state.
+
+    Raises:
+        pydantic.ValidationError: If the graph state does not match the
+            ``SQLAssistantState`` schema.
+    """
     return SQLAssistantState.model_validate(state)
 
 

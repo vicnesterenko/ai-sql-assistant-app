@@ -38,6 +38,7 @@ from the specific approval row to avoid resuming the wrong query.
 """
 from langgraph.graph import END, StateGraph
 from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.runnables import RunnableConfig
 
 from app.graph.state import SQLAssistantStateDict
 from app.graph.nodes import (
@@ -172,9 +173,14 @@ async def run_message_graph(session_id: str, thread_id: str, requester_email: st
         messages=history,
         current_question=message,
     )
-    result = await compiled_graph.ainvoke(
-        state.model_dump(),
-        config={"configurable": {"thread_id": f"{session_id}:{thread_id}"}},
+    # thread_id потрібен LangGraph для прив’язування checkpoint/state до конкретної гілки діалогу.
+    result = await compiled_graph.ainvoke( # Asynchronously run the graph with a single input and config
+        state.model_dump(), # A dictionary representation of the model
+        config=RunnableConfig(
+            configurable={
+                "thread_id": f"{session_id}:{thread_id}",
+            },
+        )
     )
     final_state = SQLAssistantState.model_validate(result)
     await save_state(final_state)
@@ -236,7 +242,11 @@ async def resume_after_approval(approval_id: str) -> SQLAssistantState | None:
     )
     result = await compiled_resume_graph.ainvoke(
         updated.model_dump(),
-        config={"configurable": {"thread_id": f"{updated.session_id}:{updated.thread_id}:{approval_id}"}},
+        config=RunnableConfig(
+            configurable={
+                "thread_id": f"{updated.session_id}:{updated.thread_id}:{approval_id}"
+            }
+        ),
     )
     final_state = SQLAssistantState.model_validate(result)
     await save_state(final_state)
